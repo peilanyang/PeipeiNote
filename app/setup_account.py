@@ -14,9 +14,9 @@ def main() -> None:
         char.isalnum() or char in "_.-" for char in username
     ):
         raise SystemExit("帳號請使用 1 至 128 個文字、數字、底線、句點或連字號。")
-    password = getpass("密碼（至少 12 字元）：")
-    if not 12 <= len(password) <= 1024:
-        raise SystemExit("密碼長度須為 12 至 1024 字元。")
+    password = getpass("密碼（至少 8 字元）：")
+    if not 8 <= len(password) <= 1024:
+        raise SystemExit("密碼長度須為 8 至 1024 字元。")
     if password != getpass("再輸入一次密碼："):
         raise SystemExit("密碼不一致，請重試。")
     password_hash = hasher.hash(password)
