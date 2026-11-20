@@ -46,13 +46,13 @@ if (source && editorHost && toolbar && format) {
     editorProps: {
       handlePaste(_view, event) {
         const files = Array.from(event.clipboardData?.files || []);
-        if (!files.length) return false;
+        if (!files.length || !editorHost.dataset.uploadUrl) return false;
         void uploadFiles(files);
         return true;
       },
       handleDrop(view, event) {
         const files = Array.from(event.dataTransfer?.files || []);
-        if (!files.length) return false;
+        if (!files.length || !editorHost.dataset.uploadUrl) return false;
         const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
         if (at) editor.commands.setTextSelection(at.pos);
         void uploadFiles(files);
@@ -142,13 +142,15 @@ if (source && editorHost && toolbar && format) {
     }
   }
 
-  choose.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', () => {
-    const files = Array.from(fileInput.files);
-    fileInput.value = '';
-    void uploadFiles(files);
-  });
-  picker.hidden = false;
+  if (picker) {
+    choose.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const files = Array.from(fileInput.files);
+      fileInput.value = '';
+      void uploadFiles(files);
+    });
+    picker.hidden = false;
+  }
 
   const styles = toolbar.querySelector('select');
   const bold = toolbar.querySelector('[data-command="toggleBold"]');

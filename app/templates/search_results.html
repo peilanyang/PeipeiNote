@@ -1,0 +1,25 @@
+<section id="search-results" class="rule" aria-label="搜尋結果" aria-live="polite">
+  {% if not active %}
+    <p class="muted">輸入關鍵字以搜尋筆記。</p>
+  {% elif rows %}
+    <ul class="list">
+      {% for result in rows %}
+        <li>
+          <a href="/?kind=note&amp;item_id={{ result.id }}">
+            <strong>{{ result.title }}</strong>
+            <p class="note-preview">{{ result.summary }}</p>
+            <p class="crumb">{{ result.notebook }} / {{ result.topic }}</p>
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">找不到符合條件的筆記。</p>
+  {% endif %}
+  {% if previous or next %}
+    <nav class="inline" aria-label="搜尋結果分頁">
+      {% if previous %}<a class="button-link" href="{{ previous }}">上一頁</a>{% endif %}
+      {% if next %}<a class="button-link" href="{{ next }}">下一頁</a>{% endif %}
+    </nav>
+  {% endif %}
+</section>

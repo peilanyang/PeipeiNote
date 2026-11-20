@@ -21,12 +21,13 @@ def filter_attribute(tag: str, name: str, value: str) -> str | None:
     return value
 
 
-cleaner = Cleaner(
-    tags={
-        "p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "hr",
-        "a", "ul", "ol", "li", "blockquote", "pre", "code", "div", "span",
-        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "img",
-    },
+ALLOWED_TAGS = {
+    "p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "hr",
+    "a", "ul", "ol", "li", "blockquote", "pre", "code", "div", "span",
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td", "img",
+}
+
+CLEAN_OPTIONS = dict(
     clean_content_tags={"script", "style", "iframe", "object", "svg", "math", "template"},
     attribute_filter=filter_attribute,
     attributes={"img": {"src", "alt", "width", "height"}, "a": {"href"}, "ol": {"start"}, "td": {"colspan", "rowspan"}, "th": {"colspan", "rowspan"}},
@@ -37,6 +38,15 @@ cleaner = Cleaner(
     url_schemes={"http", "https", "mailto"},
     url_relative=lambda value: value if re.fullmatch(r"/api/files/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)", value) else None,
 )
+
+
+cleaner = Cleaner(tags=ALLOWED_TAGS, **CLEAN_OPTIONS)
+template_cleaner = Cleaner(tags=ALLOWED_TAGS - {"img"}, **CLEAN_OPTIONS)
+
+
+def template_html(content: str) -> str:
+    # 範本保存排版，避免引用只屬於原筆記的圖片。
+    return template_cleaner.clean(content)
 
 
 def clean_html(content: str) -> str:

@@ -269,3 +269,59 @@ def test_private_attachments_lifecycle(
     submit(client, "/logout")
     assert client.get(pdf_url).status_code == 401
     assert client.post(upload, content=b"test", headers={**headers, "X-Filename": quote("file.txt")}).status_code == 401
+
+
+def test_search_tags_and_template_workflow(client: TestClient, credentials: dict[str, str]) -> None:
+    # 跨筆記本搜尋和標籤篩選，並驗證範本會複製淨化後的格式。
+    headers = {"Origin": ORIGIN}
+    assert client.get("/library/search?q=旅遊").status_code == 401
+    assert client.post("/library/tags", data={"name": "未登入"}, headers=headers).status_code == 401
+    submit(client, "/login", **credentials)
+    for book in ("工作", "生活"):
+        index = 1 if book == "工作" else 2
+        submit(client, "/workspace/notebook", name=book)
+        submit(client, "/workspace/section", parent_id=index, name="清單")
+        submit(client, "/workspace/topic", parent_id=index, name="主題")
+    submit(client, "/library/tags", name="旅遊")
+    submit(client, "/library/tags", name="備忘")
+    assert client.post("/library/tags", data={"name": "旅遊"}, headers=headers).status_code == 409
+    assert client.post("/library/templates", data={"name": "來源錯誤"}).status_code == 403
+    saved = submit(
+        client, "/library/templates", name="行程表", content_format="html",
+        content='<h2>行程規劃</h2><p>明年到北海道旅行</p><script type="text/plain">應被移除</script>',
+    )
+    assert "&lt;h2&gt;行程規劃&lt;/h2&gt;" in client.get(saved).text
+    submit(client, "/library/templates", record_id=1, name="出差範本", content_format="html",
+           content="<h2>行程規劃</h2><p>明年到北海道旅行</p>")
+    topic = client.get("/?kind=topic&item_id=1").text
+    assert "出差範本" in topic
+    note = submit(client, "/workspace/note", parent_id=1, name="北方之旅", template_id=1)
+    assert "&lt;h2&gt;行程規劃&lt;/h2&gt;" in client.get(note).text
+    assert client.post("/workspace/note", data={"parent_id": 1, "name": "錯誤", "template_id": 99}, headers=headers).status_code == 404
+    submit(client, "/workspace/note", parent_id=2, name="假期準備", template_id="")
+    submit(client, "/workspace/note/2/save", name="假期準備", content='行前筆記：搭飛機到北海道。查找 "登機門"。')
+    for _ in range(2):
+        submit(client, "/library/notes/1/tags", action="add", tag_id=1)
+    submit(client, "/library/notes/1/tags", action="add", tag_id=2)
+    submit(client, "/library/notes/2/tags", action="add", tag_id=1)
+    submit(client, "/library/tags", record_id=1, name="旅行")
+    tagged = client.get("/library/search", params={"tag": 1}).text
+    assert "旅行" in tagged and "北方之旅" in tagged and "假期準備" in tagged
+
+    across = client.get("/library/search", params={"q": "北海道", "partial": "true"}).text
+    assert "北方之旅" in across and "假期準備" in across and "明年到北海道旅行" in across
+    scoped = client.get("/library/search", params={"q": "北海道", "book": 2}).text
+    assert "假期準備" in scoped and "北方之旅" not in scoped
+    assert "北方之旅" in client.get("/library/search", params={"q": "北方"}).text
+    assert "假期準備" in client.get("/library/search", params={"q": '"登機門"'}).text
+
+    submit(client, "/library/notes/1/tags", action="remove", tag_id=1)
+    assert "北方之旅" not in client.get("/library/search", params={"tag": 1}).text
+    submit(client, "/library/tags", record_id=2, action="delete")
+    assert client.get("/library/search", params={"tag": 2}).status_code == 404
+    submit(client, "/library/templates", record_id=1, action="delete")
+    assert "行程規劃" in client.get(note).text
+    submit(client, "/workspace/note/2/save", name="假期準備", content="東京")
+    assert "假期準備" not in client.get("/library/search", params={"q": "北海道"}).text
+    submit(client, "/workspace/note/1/delete", confirmed="true")
+    assert "北方之旅" not in client.get("/library/search", params={"q": "北海道"}).text

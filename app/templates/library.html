@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if mode == 'search' %}全文搜尋{% elif mode == 'tags' %}標籤管理{% else %}範本管理{% endif %} | PeipeiNote</title>
+  {% include "workspace_style.html" %}
+  <style>
+    body.library-page { display: block; height: auto; overflow: auto; }
+    .library { max-width: 62rem; margin: auto; padding: 1.5rem clamp(1rem, 4vw, 3rem); }
+    .library a { color: var(--green); }
+    .library h2 { font-size: 1.35rem; }
+    .library form { margin-top: .8rem; }
+    .library .list { margin-top: 1rem; }
+    .library .list a { display: block; }
+    .library .list p { white-space: normal; }
+    .library .rich-editor .tiptap { min-height: 11rem; }
+    .library .note-form .tiptap { min-height: 11rem; }
+    .library .search-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; align-items: end; gap: .65rem; }
+    .library .search-form label { min-width: 0; }
+    .library .search-form input, .library .search-form select { margin-top: .3rem; }
+    @media (max-width: 550px) { .library .search-form { grid-template-columns: minmax(0, 1fr); } }
+  </style>
+</head>
+<body class="library-page">
+  <header>
+    <div class="brand"><h1><a href="/">PeipeiNote</a></h1></div>
+    <nav class="header-actions" aria-label="工作區工具">
+      <a class="button-link" href="/">返回工作區</a>
+      <a href="/library/search">全文搜尋</a>
+      <a href="/library/tags">標籤</a>
+      <a href="/library/templates">範本</a>
+    </nav>
+  </header>
+  <main class="library">
+    {% if mode == 'search' %}
+      <h2>{% if tag %}標籤：{{ tag.name }}{% else %}全文搜尋{% endif %}</h2>
+      <form class="search-form" id="library-search" method="get" action="/library/search">
+        {% if tag %}<input type="hidden" name="tag" value="{{ tag.id }}">{% endif %}
+        <label>關鍵字<input type="search" name="q" maxlength="160" value="{{ q }}" placeholder="搜尋筆記標題及內文"></label>
+        <label>搜尋範圍<select name="book">
+          <option value="0">全部筆記本</option>
+          {% for notebook in books %}<option value="{{ notebook.id }}"{% if book == notebook.id %} selected{% endif %}>{{ notebook.name }}</option>{% endfor %}
+        </select></label>
+        <button type="submit" class="primary">搜尋</button>
+      </form>
+      {% include "search_results.html" %}
+      <script defer src="/static/library-search.js"></script>
+    {% else %}
+      {% set kind_label = '標籤' if mode == 'tags' else '範本' %}
+      <h2>{{ kind_label }}管理</h2>
+      <ul class="list">
+        {% for entry in items %}
+          <li class="inline">
+            <a href="/library/{{ mode }}?selected={{ entry.id }}"{% if item and entry.id == item.id %} aria-current="page"{% endif %}>{{ entry.name }}</a>
+            {% if mode == 'tags' %}<a href="/library/search?tag={{ entry.id }}">查看筆記</a>{% endif %}
+          </li>
+        {% else %}<li class="muted">目前沒有{{ kind_label }}。</li>{% endfor %}
+      </ul>
+      {% if item %}<p class="rule"><a href="/library/{{ mode }}">新增{{ kind_label }}</a></p>{% endif %}
+      <form class="stack rule note-form" method="post" action="/library/{{ mode }}">
+        {% if item %}<input type="hidden" name="record_id" value="{{ item.id }}">{% endif %}
+        <label>{{ kind_label }}名稱<input name="name" maxlength="200" value="{{ item.name if item else '' }}" required></label>
+        {% if mode == 'templates' %}{% include "note_editor.html" %}{% endif %}
+        <button class="primary" type="submit">{{ '儲存' if item else '新增' }}{{ kind_label }}</button>
+      </form>
+      {% if item %}
+        <form class="stack rule" method="post" action="/library/{{ mode }}">
+          <input type="hidden" name="record_id" value="{{ item.id }}">
+          <label><input type="checkbox" required> 確認刪除「{{ item.name }}」</label>
+          <button class="danger" name="action" value="delete" type="submit">刪除{{ kind_label }}</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </main>
+</body>
+</html>

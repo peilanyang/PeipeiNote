@@ -5,6 +5,8 @@ from sqlalchemy import Column, ForeignKey, Table, URL, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.search import note_text
+
 
 class Base(DeclarativeBase):
     pass
@@ -73,6 +75,9 @@ class Template(Base):
     content: Mapped[str] = mapped_column(default="")
 
 
+    content_format: Mapped[str] = mapped_column(server_default="plain")
+
+
 class Attachment(Base):
     __tablename__ = "attachments"
 
@@ -102,6 +107,7 @@ class LoginSession(Base):
 def enable_foreign_keys(connection: Connection, _record: object) -> None:
     # SQLite 必須在每條連線上開啟外鍵檢查。
     connection.execute("PRAGMA foreign_keys = ON").close()
+    connection.create_function("peipeinote_text", 2, note_text, deterministic=True)
 
 
 def make_engine(path: Path) -> Engine:

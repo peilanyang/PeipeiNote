@@ -10,9 +10,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.auth import COOKIE, ROOT, Settings, require_same_origin, session_active
-from app.database import Attachment, Note, Notebook, NotebookPosition, Topic, TopicList
+from app.database import Attachment, Note, Notebook, NotebookPosition, Tag, Template, Topic, TopicList, note_tags
 
-from app.richtext import NoteFormat, clean_html, editor_source
+from app.richtext import NoteFormat, clean_html, editor_source, template_html
 
 MAX_ID = 2**63 - 1
 NAME_LIMIT = 200
@@ -115,6 +115,10 @@ def render_workspace(request: Request, engine: Engine, kind: Kind | None, item_i
             if row.id != active.get(parent.value)
         ] if parent is not None else []
         child = CHILD.get(kind)
+        tags = list(db.scalars(select(Tag).order_by(Tag.name)))
+        assigned_tag_ids = set(db.scalars(select(note_tags.c.tag_id).where(
+            note_tags.c.note_id == selection.id
+        ))) if isinstance(selection, Note) else set()
         return templates.TemplateResponse(
             request=request,
             name="workspace.html",
@@ -126,6 +130,9 @@ def render_workspace(request: Request, engine: Engine, kind: Kind | None, item_i
                 "attachments": list(db.scalars(select(Attachment).where(
                     Attachment.note_id == selection.id
                 ).order_by(Attachment.id))) if isinstance(selection, Note) else [],
+                "tags": tags, "assigned_tag_ids": assigned_tag_ids,
+                "note_templates": db.execute(select(Template.id, Template.name).order_by(Template.name)).all() if topic_id else [],
+                "editor_content_format": selection.content_format if isinstance(selection, Note) else "plain",
                 "editor_content": editor_source(selection.content, selection.content_format)
                 if isinstance(selection, Note) else "",
                 "label": LEVELS[kind].label if kind else None,
@@ -209,6 +216,7 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
         kind: Kind,
         name: Annotated[str, Form()],
         parent_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
+        template_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
     ) -> RedirectResponse:
         # 建立項目前確認父層存在，並在同一交易中寫入。
         authorized(request)
@@ -224,6 +232,14 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
                 setattr(item, level.parent_key, parent_id)
             elif parent_id is not None:
                 raise HTTPException(422, "筆記本位於最上層。")
+            if template_id is not None:
+                if not isinstance(item, Note):
+                    raise HTTPException(422, "範本只能套用至筆記。")
+                template = db.get(Template, template_id)
+                if template is None:
+                    raise HTTPException(404, "找不到這個範本。")
+                item.content_format = template.content_format
+                item.content = template_html(template.content) if template.content_format == "html" else template.content
             db.add(item)
             db.flush()
             return RedirectResponse(item_url(kind, item.id), status_code=303)
