@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.auth import (
-    COOKIE, ROOT, SESSION_SECONDS, Settings, authenticate, read_settings,
+    COOKIE, COOKIE_SECONDS, ROOT, Settings, authenticate, read_settings,
     require_same_origin, revoke_session, session_active,
 )
 from app.database import Base, make_engine
@@ -60,13 +60,22 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[site.hostname])
 
+    def remember_login(response: Response, token: str) -> None:
+        # 進入首頁時續存瀏覽器 Cookie。
+        response.set_cookie(
+            COOKIE, token, max_age=COOKIE_SECONDS, httponly=True, secure=secure_cookie, samesite="lax"
+        )
+
     @app.get("/")
     def home(request: Request) -> Response:
         # 首頁只顯示給已通過登入驗證的使用者。
-        if not session_active(engine, settings, request.cookies.get(COOKIE)):
+        token = request.cookies.get(COOKIE)
+        if not token or not session_active(engine, settings, token):
             return RedirectResponse("/login", status_code=303, headers={"Cache-Control": "no-store"})
-        return page("首頁", """<p>已登入。你的筆記工作區已就緒。</p>
+        response = page("首頁", """<p>已登入。你的筆記工作區已就緒。</p>
 <form method="post" action="/logout"><button type="submit">登出</button></form>""")
+        remember_login(response, token)
+        return response
 
     @app.get("/login")
     def login_page() -> HTMLResponse:
@@ -100,9 +109,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
             return page("登入失敗", "<p>帳號或密碼錯誤。</p><a href='/login'>回登入頁</a>", 401)
         revoke_session(engine, settings, request.cookies.get(COOKIE))
         response = RedirectResponse("/", status_code=303, headers={"Cache-Control": "no-store"})
-        response.set_cookie(
-            COOKIE, token, max_age=SESSION_SECONDS, httponly=True, secure=secure_cookie, samesite="lax"
-        )
+        remember_login(response, token)
         return response
 
     @app.post("/logout")

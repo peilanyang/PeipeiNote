@@ -38,7 +38,7 @@ def test_login_logout_and_cookie(client: TestClient, credentials: dict[str, str]
     response = client.post("/login", data=credentials, headers={"Origin": ORIGIN}, follow_redirects=False)
     assert response.status_code == 303
     cookie = response.headers["set-cookie"].lower()
-    assert all(flag in cookie for flag in ("httponly", "secure", "samesite=lax", "max-age=28800"))
+    assert all(flag in cookie for flag in ("httponly", "secure", "samesite=lax", f"max-age={auth.COOKIE_SECONDS}"))
     token = client.cookies[auth.COOKIE]
     assert "已登入" in client.get("/").text
     assert client.post("/logout", headers={"Origin": ORIGIN}, follow_redirects=False).status_code == 303
@@ -74,14 +74,17 @@ def test_csrf_and_invalid_session(client: TestClient, credentials: dict[str, str
     assert client.get("/", follow_redirects=False).status_code == 303
 
 
-def test_session_expires(client: TestClient, credentials: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    # 伺服器端憑證到期後，即使瀏覽器仍送 Cookie，也必須重新登入。
+def test_session_survives_past_original_timeout(client: TestClient, credentials: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    # 模擬超過原本的 8 小時，確認登入仍有效。
     clock = SimpleNamespace(now=10_000)
     monkeypatch.setattr(auth, "time", SimpleNamespace(time=lambda: clock.now))
     client.post("/login", data=credentials, headers={"Origin": ORIGIN}).raise_for_status()
     assert "已登入" in client.get("/").text
-    clock.now += auth.SESSION_SECONDS
-    assert client.get("/", follow_redirects=False).status_code == 303
+    clock.now += 30 * 24 * 60 * 60
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 200
+    assert "已登入" in response.text
+    assert f"Max-Age={auth.COOKIE_SECONDS}" in response.headers["set-cookie"]
 
 
 def test_unconfigured_app(tmp_path: Path) -> None:

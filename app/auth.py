@@ -19,7 +19,7 @@ from app.database import LoginAttempt, LoginSession
 
 ROOT = Path(__file__).resolve().parents[1]
 COOKIE = "peipeinote_session"
-SESSION_SECONDS = 8 * 60 * 60
+COOKIE_SECONDS = 365 * 24 * 60 * 60
 LOCK_SECONDS = 15 * 60
 FAILURE_LIMIT = 5
 hasher = PasswordHasher()
@@ -95,9 +95,9 @@ def authenticate(
         if valid_password and valid_user:
             if attempt:
                 db.delete(attempt)
-            db.execute(delete(LoginSession).where(LoginSession.expires_at <= now))
+            db.execute(delete(LoginSession).where(LoginSession.expires_at > 0, LoginSession.expires_at <= now))
             token = secrets.token_urlsafe(32)
-            db.add(LoginSession(digest=session_digest(settings, token), expires_at=now + SESSION_SECONDS))
+            db.add(LoginSession(digest=session_digest(settings, token), expires_at=0))
             return token, 0
 
         if attempt is None:
@@ -112,12 +112,12 @@ def authenticate(
 
 
 def session_active(engine: Engine, settings: Settings, token: str | None) -> bool:
-    # 檢查伺服器端登入紀錄與到期時間。
+    # 新登入的到期值為 0，舊憑證仍按原期限驗證。
     if not token or not settings.configured:
         return False
     with Session(engine) as db:
         record = db.get(LoginSession, session_digest(settings, token))
-        return record is not None and record.expires_at > int(time.time())
+        return record is not None and (record.expires_at == 0 or record.expires_at > int(time.time()))
 
 
 def revoke_session(engine: Engine, settings: Settings, token: str | None) -> None:
