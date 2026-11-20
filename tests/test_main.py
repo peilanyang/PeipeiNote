@@ -103,3 +103,84 @@ def test_unconfigured_app(tmp_path: Path) -> None:
 def test_private_paths_are_not_exposed(client: TestClient, method: str, path: str) -> None:
     # 確認公開註冊、機密設定、上傳路徑及 API 文件均未開放。
     assert client.request(method, path).status_code == 404
+
+def submit(client: TestClient, path: str, **fields: str | int) -> str:
+    # 送出同源表單並傳回成功後的工作區網址。
+    response = client.post(path, data=fields, headers={"Origin": ORIGIN}, follow_redirects=False)
+    assert response.status_code == 303, response.text
+    return response.headers["location"]
+
+
+def test_workspace_creates_edits_moves_and_deletes_all_levels(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 從登入後的三欄介面建立四層資料，逐層改名、移動和刪除。
+    submit(client, "/login", **credentials)
+    assert 'class="workspace"' in client.get("/").text
+    names = ("第一本", "第二本")
+    first_book = submit(client, "/workspace/notebook", name=names[0])
+    second_book = submit(client, "/workspace/notebook", name=names[1])
+    submit(client, "/workspace/notebook/2/move", direction=-1)
+    ordered = client.get("/").text
+    assert ordered.index(names[1]) < ordered.index(names[0])
+    submit(client, "/workspace/notebook/1/save", name="工作筆記本")
+    assert "工作筆記本" in client.get(first_book).text
+
+    section = submit(client, "/workspace/section", parent_id=1, name="工作清單")
+    other_section = submit(client, "/workspace/section", parent_id=2, name="其他清單")
+    submit(client, "/workspace/section/1/save", name="專案清單")
+    submit(client, "/workspace/section/1/move", target_id=2)
+    section_page = client.get(section).text
+    assert "專案清單" in section_page and 'item_id=2" aria-current="page"' in client.get(second_book).text
+    assert '<details open>' in section_page
+
+    topic = submit(client, "/workspace/topic", parent_id=1, name="工作主題")
+    destination = submit(client, "/workspace/topic", parent_id=2, name="另一個主題")
+    submit(client, "/workspace/topic/1/save", name="新主題")
+    submit(client, "/workspace/topic/1/move", target_id=2)
+    assert "新主題" in client.get(topic).text
+
+    note = submit(client, "/workspace/note", parent_id=1, name="我的筆記")
+    title = "O'Reilly & 研究筆記"
+    body = "\n測試 <標記> 與引號\n第二行"
+    submit(client, "/workspace/note/1/save", name=title, content=body)
+    editor = client.get(note).text
+    assert "O&#39;Reilly &amp; 研究筆記" in editor
+    assert "\n測試 &lt;標記&gt; 與引號\n第二行" in editor
+    assert 'action="/workspace/note/1/save"' in editor
+    assert 'action="/logout"' in editor
+    submit(client, "/workspace/note/1/move", target_id=2)
+    assert "O&#39;Reilly" not in client.get(topic).text
+    assert "O&#39;Reilly" in client.get(destination).text
+
+    assert submit(client, "/workspace/note/1/delete", confirmed="true") == destination
+    assert submit(client, "/workspace/topic/2/delete", confirmed="true") == other_section
+    assert submit(client, "/workspace/topic/1/delete", confirmed="true") == other_section
+    assert submit(client, "/workspace/section/2/delete", confirmed="true") == second_book
+    assert submit(client, "/workspace/section/1/delete", confirmed="true") == second_book
+    assert submit(client, "/workspace/notebook/1/delete", confirmed="true") == "/"
+    assert submit(client, "/workspace/notebook/2/delete", confirmed="true") == "/"
+    assert "先從左欄新增一本筆記本" in client.get("/").text
+
+
+def test_workspace_guards_mutations_and_preserves_children(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 未登入、跨來源、未確認刪除與無效的父層都不能寫入資料。
+    assert client.post("/workspace/notebook", data={"name": "測試筆記本"}, headers={"Origin": ORIGIN}).status_code == 401
+    submit(client, "/login", **credentials)
+    assert client.post("/workspace/notebook", data={"name": "跨站"}, headers={"Origin": "https://elsewhere.test"}).status_code == 403
+    book = submit(client, "/workspace/notebook", name="原有筆記本")
+    submit(client, "/workspace/section", name="要保留的清單", parent_id=1)
+    for action, data in [
+        ("save", {"name": "新名稱"}), ("move", {"direction": "1"}), ("delete", {"confirmed": "true"}),
+    ]:
+        assert client.post(f"/workspace/notebook/1/{action}", data=data).status_code == 403
+    headers = {"Origin": ORIGIN}
+    assert client.post("/workspace/notebook/1/delete", headers=headers).status_code == 422
+    assert client.post("/workspace/notebook/1/delete", headers=headers, data={"confirmed": "true"}).status_code == 409
+    assert client.post("/workspace/topic", headers=headers, data={"name": "孤立主題", "parent_id": 250}).status_code == 404
+    assert client.post("/workspace/section/1/move", headers=headers, data={"target_id": 250}).status_code == 404
+    result = client.get(book).text
+    assert "原有筆記本" in result and "要保留的清單" in result
+    assert "跨站" not in result

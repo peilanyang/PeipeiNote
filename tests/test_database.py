@@ -14,7 +14,7 @@ def test_database_schema_and_foreign_keys(tmp_path: Path) -> None:
     try:
         Base.metadata.create_all(engine)
         assert {
-            "notebooks", "topic_lists", "topics", "notes", "tags", "note_tags",
+            "notebooks", "notebook_positions", "topic_lists", "topics", "notes", "tags", "note_tags",
             "templates", "attachments", "login_attempts", "login_sessions",
         } == set(inspect(engine).get_table_names())
         with Session(engine) as db, db.begin():

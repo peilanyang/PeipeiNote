@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -13,6 +13,7 @@ from app.auth import (
     require_same_origin, revoke_session, session_active,
 )
 from app.database import Base, make_engine
+from app.workspace import MAX_ID, Kind, render_workspace, workspace_actions
 
 
 def page(title: str, content: str, status: int = 200) -> HTMLResponse:
@@ -60,6 +61,8 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[site.hostname])
 
+    app.include_router(workspace_actions(engine, settings))
+
     def remember_login(response: Response, token: str) -> None:
         # 進入首頁時續存瀏覽器 Cookie。
         response.set_cookie(
@@ -67,13 +70,18 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
         )
 
     @app.get("/")
-    def home(request: Request) -> Response:
+    def home(
+        request: Request,
+        kind: Kind | None = None,
+        item_id: Annotated[int | None, Query(gt=0, le=MAX_ID)] = None,
+    ) -> Response:
         # 首頁只顯示給已通過登入驗證的使用者。
         token = request.cookies.get(COOKIE)
         if not token or not session_active(engine, settings, token):
             return RedirectResponse("/login", status_code=303, headers={"Cache-Control": "no-store"})
-        response = page("首頁", """<p>已登入。你的筆記工作區已就緒。</p>
-<form method="post" action="/logout"><button type="submit">登出</button></form>""")
+        if (kind is None) != (item_id is None):
+            raise HTTPException(422, "請同時指定項目層級和編號。")
+        response = render_workspace(request, engine, kind, item_id)
         remember_login(response, token)
         return response
 

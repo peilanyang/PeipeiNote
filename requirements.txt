@@ -7,3 +7,4 @@ SQLAlchemy>=2.0,<2.1
 argon2-cffi
 python-dotenv
 python-multipart
+jinja2

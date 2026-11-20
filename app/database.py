@@ -17,6 +17,13 @@ class Notebook(Base):
     name: Mapped[str]
 
 
+class NotebookPosition(Base):
+    __tablename__ = "notebook_positions"
+
+    notebook_id: Mapped[int] = mapped_column(ForeignKey("notebooks.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int]
+
+
 class TopicList(Base):
     __tablename__ = "topic_lists"
 
