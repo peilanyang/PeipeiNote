@@ -9,5 +9,5 @@ python-dotenv
 python-multipart
 jinja2
 nh3>=0.3.2,<0.4
-Pillow>=12,<13
+Pillow>=13.0,<14
 python-docx>=1.2,<2
