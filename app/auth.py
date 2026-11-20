@@ -1,0 +1,127 @@
+import hmac
+import logging
+import secrets
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from argon2 import PasswordHasher, extract_parameters
+from argon2.exceptions import InvalidHashError, VerificationError
+from argon2.low_level import Type
+from dotenv import dotenv_values
+from fastapi import HTTPException, Request
+from sqlalchemy import delete
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
+
+from app.database import LoginAttempt, LoginSession
+
+ROOT = Path(__file__).resolve().parents[1]
+COOKIE = "peipeinote_session"
+SESSION_SECONDS = 8 * 60 * 60
+LOCK_SECONDS = 15 * 60
+FAILURE_LIMIT = 5
+hasher = PasswordHasher()
+logger = logging.getLogger("uvicorn.error")
+
+
+@dataclass(frozen=True)
+class Settings:
+    username: str = ""
+    password_hash: str = field(default="", repr=False)
+    secret: str = field(default="", repr=False)
+    origin: str = "http://127.0.0.1:8000"
+
+    @property
+    def configured(self) -> bool:
+        # 缺少帳號、有效的 Argon2id 雜湊或金鑰時，關閉登入。
+        try:
+            params = extract_parameters(self.password_hash)
+        except (InvalidHashError, ValueError):
+            return False
+        return bool(self.username and len(self.secret) >= 32 and params.type == Type.ID)
+
+
+def read_settings() -> Settings:
+    # 只讀專案根目錄的設定，不展開密碼雜湊中的美元符號。
+    values = dotenv_values(ROOT / ".env", interpolate=False)
+    return Settings(
+        username=values.get("ADMIN_USERNAME") or "",
+        password_hash=values.get("ADMIN_PASSWORD_HASH") or "",
+        secret=values.get("SECRET_KEY") or "",
+        origin=values.get("APP_ORIGIN") or Settings.origin,
+    )
+
+
+def require_same_origin(request: Request, settings: Settings) -> None:
+    # 比對固定的站台來源，僅在缺少 Origin 時才採用 Referer。
+    origin = request.headers.get("origin")
+    if origin is None:
+        try:
+            referer = urlsplit(request.headers.get("referer", ""))
+        except ValueError:
+            raise HTTPException(403, "請從 PeipeiNote 頁面操作。") from None
+        origin = f"{referer.scheme}://{referer.netloc}"
+    if origin != settings.origin:
+        raise HTTPException(403, "請從 PeipeiNote 頁面操作。")
+
+
+def session_digest(settings: Settings, token: str) -> str:
+    # 資料庫只存登入憑證的摘要，換金鑰可使舊憑證失效。
+    key = hmac.digest(settings.secret.encode(), settings.password_hash.encode(), "sha256")
+    return hmac.digest(key, token.encode(), "sha256").hex()
+
+
+def authenticate(
+    engine: Engine, settings: Settings, ip: str, username: str, password: str
+) -> tuple[str | None, int]:
+    # 以 SQLite 寫入鎖序列化計數，避免同時送出的請求跳過鎖定。
+    with Session(engine) as db, db.begin():
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        now = int(time.time())
+        attempt = db.get(LoginAttempt, ip)
+        if attempt and attempt.locked_until > now:
+            return None, attempt.locked_until - now
+        if attempt and attempt.locked_until:
+            attempt.failures = 0
+            attempt.locked_until = 0
+
+        try:
+            valid_password = len(password) <= 1024 and hasher.verify(settings.password_hash, password)
+        except (VerificationError, InvalidHashError):
+            valid_password = False
+        valid_user = hmac.compare_digest(settings.username.encode(), username.encode())
+        if valid_password and valid_user:
+            if attempt:
+                db.delete(attempt)
+            db.execute(delete(LoginSession).where(LoginSession.expires_at <= now))
+            token = secrets.token_urlsafe(32)
+            db.add(LoginSession(digest=session_digest(settings, token), expires_at=now + SESSION_SECONDS))
+            return token, 0
+
+        if attempt is None:
+            attempt = LoginAttempt(ip=ip, failures=0, locked_until=0)
+            db.add(attempt)
+        attempt.failures += 1
+        if attempt.failures >= FAILURE_LIMIT:
+            attempt.locked_until = now + LOCK_SECONDS
+            logger.warning("PeipeiNote 登入失敗達上限，已鎖定 IP %s 15 分鐘", ip)
+            return None, LOCK_SECONDS
+        return None, 0
+
+
+def session_active(engine: Engine, settings: Settings, token: str | None) -> bool:
+    # 檢查伺服器端登入紀錄與到期時間。
+    if not token or not settings.configured:
+        return False
+    with Session(engine) as db:
+        record = db.get(LoginSession, session_digest(settings, token))
+        return record is not None and record.expires_at > int(time.time())
+
+
+def revoke_session(engine: Engine, settings: Settings, token: str | None) -> None:
+    # 登出時撤銷目前憑證，連已複製的 Cookie 也不能再使用。
+    if token:
+        with Session(engine) as db, db.begin():
+            db.execute(delete(LoginSession).where(LoginSession.digest == session_digest(settings, token)))

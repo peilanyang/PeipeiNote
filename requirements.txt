@@ -3,3 +3,7 @@ uvicorn
 httpx2
 pytest
 bandit
+SQLAlchemy>=2.0,<2.1
+argon2-cffi
+python-dotenv
+python-multipart
