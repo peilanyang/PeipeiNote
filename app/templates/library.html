@@ -20,8 +20,7 @@
     .library .search-form label { min-width: 0; }
     .library .search-form input, .library .search-form select { margin-top: .3rem; }
     .library.tag-library { margin-inline: 0; max-width: 68rem; padding-inline: clamp(1rem, 3vw, 2rem); }
-    .tag-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .85fr);
-      align-items: start; gap: 1rem; margin-top: 1rem; }
+    .tag-layout { display: grid; gap: 1rem; margin-top: 1rem; }
     .tag-panel { min-width: 0; background: var(--paper); border: 1px solid var(--line);
       border-radius: 10px; padding: 1rem; }
     .tag-panel h3 { font-size: 1.03rem; }
@@ -33,7 +32,10 @@
     .tag-row-title { flex: 1 1 8rem; min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
     .tag-actions { display: flex; flex-wrap: wrap; gap: .7rem; font-size: .87rem; }
     .tag-actions a { white-space: nowrap; }
-    .tag-panel input[name=name] { max-width: 30rem; }
+    .tag-panel input[name=name] { width: min(100%, max(10rem, 50%)); max-width: 15rem; }
+    .tag-create > summary { display: inline-block; }
+    .tag-create > summary::marker { content: ""; }
+    .tag-create > summary::-webkit-details-marker { display: none; }
     .tag-panel .muted { margin-top: .4rem; }
     @media (max-width: 700px) {
       .tag-layout { grid-template-columns: minmax(0, 1fr); }
@@ -84,15 +86,21 @@
           </ul>
         </section>
         <section class="tag-panel" id="tag-form" aria-labelledby="tag-form-heading">
-          <h3 id="tag-form-heading">{{ '編輯標籤' if item else '新增標籤' }}</h3>
+          {% if item %}
+            <h3 id="tag-form-heading">編輯標籤</h3>
+          {% else %}
+            <details class="tag-create">
+              <summary class="button-link primary" id="tag-form-heading">新增標籤</summary>
+          {% endif %}
           <form class="stack" method="post" action="/library/tags">
             {% if item %}<input type="hidden" name="record_id" value="{{ item.id }}">{% endif %}
             <label>標籤名稱<input name="name" maxlength="200" value="{{ item.name if item else '' }}" required></label>
             <div class="inline">
               <button class="primary" type="submit">{{ '儲存標籤' if item else '新增標籤' }}</button>
-              {% if item %}<a class="button-link" href="/library/tags#tag-form">新增其他標籤</a>{% endif %}
+              {% if item %}<a class="button-link" href="/library/tags#tag-form">返回新增標籤</a>{% endif %}
             </div>
           </form>
+          {% if not item %}</details>{% endif %}
           {% if item %}
             <details class="rule">
               <summary>刪除標籤</summary>
