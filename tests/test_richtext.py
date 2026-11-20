@@ -49,3 +49,13 @@ def test_schema_update_preserves_existing_note(tmp_path: Path) -> None:
             )
     finally:
         engine.dispose()
+
+
+def test_image_dimensions_are_preserved_and_bounded() -> None:
+    # 保留編輯器拖曳設定的像素值，去掉非數字尺寸與行內樣式。
+    src = "/api/files/0123456789abcdef0123456789abcdef.png"
+    rendered = clean_html(f'<img src="{src}" width="320" height="160.5" style="width: 90%">')
+    assert 'width="320"' in rendered and 'height="160"' in rendered
+    assert "style=" not in rendered
+    rejected = clean_html(f'<img src="{src}" width="100%" height="99999">')
+    assert "width=" not in rejected and "height=" not in rejected

@@ -12,6 +12,12 @@ def filter_attribute(tag: str, name: str, value: str) -> str | None:
     if tag == "img" and name == "src":
         if not re.fullmatch(r"/api/files/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)", value):
             return None
+    if tag == "img" and name in {"width", "height"}:
+        # 縮放數值只能是有上限的像素尺寸，不接受 CSS 或任意屬性。
+        if not re.fullmatch(r"[0-9]{1,5}(?:\.[0-9]{1,8})?", value):
+            return None
+        pixels = round(float(value))
+        return str(pixels) if 1 <= pixels <= 24000 else None
     return value
 
 
@@ -23,7 +29,7 @@ cleaner = Cleaner(
     },
     clean_content_tags={"script", "style", "iframe", "object", "svg", "math", "template"},
     attribute_filter=filter_attribute,
-    attributes={"img": {"src", "alt"}, "a": {"href"}, "ol": {"start"}, "td": {"colspan", "rowspan"}, "th": {"colspan", "rowspan"}},
+    attributes={"img": {"src", "alt", "width", "height"}, "a": {"href"}, "ol": {"start"}, "td": {"colspan", "rowspan"}, "th": {"colspan", "rowspan"}},
     tag_attribute_values={
         "ul": {"data-type": {"taskList"}},
         "li": {"data-type": {"taskItem"}, "data-checked": {"true", "false"}},

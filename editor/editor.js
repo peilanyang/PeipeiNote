@@ -66,7 +66,15 @@ if (source && editorHost && toolbar && format) {
         link: { openOnClick: true, autolink: false, isAllowedUri: allowedLink },
       }),
       TableKit,
-      PrivateImage,
+      PrivateImage.configure({
+        resize: {
+          enabled: true,
+          directions: ['bottom-right'],
+          minWidth: 16,
+          minHeight: 16,
+          alwaysPreserveAspectRatio: true,
+        },
+      }),
       TaskList,
       TaskItem.configure({ nested: true, HTMLAttributes: { "data-type": "taskItem" }, a11y: { checkboxLabel: (_, checked) => checked ? '已完成' : '未完成' } }),
     ],
