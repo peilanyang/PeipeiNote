@@ -128,6 +128,9 @@
           {% else %}<li class="muted">這個主題還沒有筆記。</li>{% endfor %}
         </ul>
         <div class="rule">{{ create_form('note', '筆記', current_topic.id) }}</div>
+      {% elif kind == 'section' %}
+        <p class="muted">這是主題清單。請從左側選取一個主題，或先在下方建立主題。進入主題後，同一欄就能新增筆記。</p>
+        <div class="rule">{{ create_form('topic', '主題', selection.id) }}</div>
       {% else %}
         <p class="muted">選取左側的主題後，即可查看和新增筆記。</p>
       {% endif %}
@@ -136,8 +139,12 @@
       {% if selection %}
         <p class="crumb">{{ label }}</p>
         <h3 id="editor-heading">{{ selection.title if kind == 'note' else selection.name }}</h3>
-        {% if child_kind and child_kind != 'note' %}
+        {% if child_kind == 'section' %}
           <div class="rule">{{ create_form(child_kind, child_label, selection.id) }}</div>
+        {% endif %}
+        {% if kind != 'note' %}
+          <details class="rule">
+            <summary>管理{{ label }}（改名、移動或刪除）</summary>
         {% endif %}
         <form class="stack rule" method="post" action="/workspace/{{ kind }}/{{ selection.id }}/save">
           <label>{{ '筆記標題' if kind == 'note' else label ~ '名稱' }}
@@ -200,6 +207,7 @@
             <p class="muted nonempty">此{{ label }}仍有下層資料。移動或清空後即可刪除。</p>
           {% endif %}
         </div>
+        {% if kind != 'note' %}</details>{% endif %}
       {% else %}
         <h3 class="heading" id="editor-heading">筆記工作區</h3>
         <p class="muted">已登入。你的筆記工作區已就緒。</p>
