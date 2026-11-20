@@ -84,7 +84,9 @@ def title_path(item: Item, kind: Kind, items: dict[Kind, dict[int, Item]]) -> st
     return " / ".join(reversed(names))
 
 
-def render_workspace(request: Request, engine: Engine, kind: Kind | None, item_id: int | None) -> Response:
+def render_workspace(
+    request: Request, engine: Engine, kind: Kind | None, item_id: int | None, new_note: bool = False,
+) -> Response:
     # 左欄讀取階層，中欄只查詢目前主題的筆記，右欄載入選取的項目。
     with Session(engine) as db, db.begin():
         db.connection().exec_driver_sql("BEGIN")
@@ -126,12 +128,15 @@ def render_workspace(request: Request, engine: Engine, kind: Kind | None, item_i
                 "books": books, "sections_by_book": group_by(sections, "notebook_id"),
                 "topics_by_section": group_by(topics, "topic_list_id"), "notes": notes,
                 "active": active, "current_topic": items[Kind.topic].get(topic_id),
+                "quick_create": new_note and selection is None,
+                "quick_topics": [(row.id, title_path(row, Kind.topic, items)) for row in topics]
+                if new_note and selection is None else [],
                 "selection": selection, "kind": kind.value if kind else None,
                 "attachments": list(db.scalars(select(Attachment).where(
                     Attachment.note_id == selection.id
                 ).order_by(Attachment.id))) if isinstance(selection, Note) else [],
                 "tags": tags, "assigned_tag_ids": assigned_tag_ids,
-                "note_templates": db.execute(select(Template.id, Template.name).order_by(Template.name)).all() if topic_id else [],
+                "note_templates": db.execute(select(Template.id, Template.name).order_by(Template.name)).all() if topic_id or (new_note and selection is None) else [],
                 "editor_content_format": selection.content_format if isinstance(selection, Note) else "plain",
                 "editor_content": editor_source(selection.content, selection.content_format)
                 if isinstance(selection, Note) else "",
@@ -200,6 +205,30 @@ def remove_item(db: Session, kind: Kind, item: Item) -> None:
     db.delete(item)
 
 
+def inbox_topic(db: Session) -> int:
+    # 在同一筆交易建立或重用首則筆記的收件匣，避免重複建立。
+    book = db.scalar(select(Notebook).where(Notebook.name == "收件匣").order_by(Notebook.id).limit(1))
+    if book is None:
+        book = Notebook(name="收件匣")
+        db.add(book)
+        db.flush()
+    section = db.scalar(select(TopicList).where(
+        TopicList.notebook_id == book.id, TopicList.name == "一般",
+    ).order_by(TopicList.id).limit(1))
+    if section is None:
+        section = TopicList(notebook_id=book.id, name="一般")
+        db.add(section)
+        db.flush()
+    topic = db.scalar(select(Topic).where(
+        Topic.topic_list_id == section.id, Topic.name == "隨手記",
+    ).order_by(Topic.id).limit(1))
+    if topic is None:
+        topic = Topic(topic_list_id=section.id, name="隨手記")
+        db.add(topic)
+        db.flush()
+    return topic.id
+
+
 def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
     # 所有資料變更共用登入驗證與同源檢查。
     router = APIRouter(prefix="/workspace")
@@ -217,6 +246,7 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
         name: Annotated[str, Form()],
         parent_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         template_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
+        use_inbox: Annotated[bool, Form()] = False,
     ) -> RedirectResponse:
         # 建立項目前確認父層存在，並在同一交易中寫入。
         authorized(request)
@@ -225,6 +255,10 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
         save_fields(item, name, "")
         with Session(engine) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            if use_inbox:
+                if kind != Kind.note or parent_id is not None:
+                    raise HTTPException(422, "收件匣只能用於沒有指定主題的新筆記。")
+                parent_id = inbox_topic(db)
             if level.parent is not None:
                 if parent_id is None:
                     raise HTTPException(422, "請先選擇上層項目。")

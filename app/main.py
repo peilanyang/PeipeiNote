@@ -86,6 +86,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
         request: Request,
         kind: Kind | None = None,
         item_id: Annotated[int | None, Query(gt=0, le=MAX_ID)] = None,
+        new_note: bool = False,
     ) -> Response:
         # 首頁只顯示給已通過登入驗證的使用者。
         token = request.cookies.get(COOKIE)
@@ -93,7 +94,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
             return RedirectResponse("/login", status_code=303, headers={"Cache-Control": "no-store"})
         if (kind is None) != (item_id is None):
             raise HTTPException(422, "請同時指定項目層級和編號。")
-        response = render_workspace(request, engine, kind, item_id)
+        response = render_workspace(request, engine, kind, item_id, new_note)
         remember_login(response, token)
         return response
 

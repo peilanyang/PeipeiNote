@@ -393,3 +393,28 @@ def test_export_word_and_print(client: TestClient, credentials: dict[str, str]) 
     assert 'class="workspace"' not in page.text and "不輸出" not in page.text
     assert "舊純文字 &lt;保留&gt;" in client.get("/print/notes/2").text
     assert client.get("/export/notebooks/99.docx").status_code == 404
+
+
+def test_home_quick_create_supports_first_note_and_existing_topics(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 從首頁開啟新增表單，並確認收件匣及選擇主題兩條流程。
+    submit(client, "/login", **credentials)
+    home = client.get("/").text
+    assert 'href="/?new_note=true#quick-note">新增筆記</a>' in home
+    assert 'id="quick-note"' not in home
+    quick = client.get("/?new_note=true").text
+    assert 'id="quick-note"' in quick and 'name="use_inbox"' in quick
+    assert client.post("/workspace/note", data={"name": "未授權", "use_inbox": "true"}).status_code == 403
+    first = submit(client, "/workspace/note", name="第一則速記", use_inbox="true")
+    assert "隨手記" in client.get(first).text
+    submit(client, "/workspace/notebook", name="工作")
+    submit(client, "/workspace/section", parent_id=2, name="任務")
+    submit(client, "/workspace/topic", parent_id=2, name="例會")
+    quick = client.get("/?new_note=true").text
+    assert "收件匣 / 一般 / 隨手記" in quick and "工作 / 任務 / 例會" in quick
+    assert 'name="use_inbox"' not in quick
+    second = submit(client, "/workspace/note", name="會議筆記", parent_id=2)
+    assert "會議筆記" in client.get(second).text
+    assert "會議筆記" in client.get("/?kind=topic&item_id=2").text
+    assert "會議筆記" not in client.get("/?kind=topic&item_id=1").text

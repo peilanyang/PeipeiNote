@@ -18,7 +18,11 @@
     <div class="brand"><h1><a href="/">PeipeiNote</a></h1></div>
     <div class="header-actions">
       <a class="button-link" href="/library/search{% if active.get('notebook') %}?book={{ active.get('notebook') }}{% endif %}">全文搜尋</a>
-      {% if current_topic %}<a class="button-link primary" href="#new-note">新增筆記</a>{% endif %}
+      {% if current_topic %}
+        <a class="button-link primary" href="#new-note">新增筆記</a>
+      {% else %}
+        <a class="button-link primary" href="/?new_note=true#quick-note">新增筆記</a>
+      {% endif %}
       <form method="post" action="/logout"><button type="submit">登出</button></form>
     </div>
   </header>
@@ -199,6 +203,27 @@
           {% endif %}
         </div>
         </details>
+      {% elif quick_create %}
+        <h3 class="heading" id="editor-heading">新增筆記</h3>
+        <form class="stack rule quick-note" id="quick-note" method="post" action="/workspace/note">
+          <label>筆記名稱<input name="name" maxlength="200" required autofocus></label>
+          {% if quick_topics %}
+            <label>放在哪個主題<select name="parent_id" required>
+              {% if quick_topics|length > 1 %}<option value="">選擇主題</option>{% endif %}
+              {% for id, path in quick_topics %}<option value="{{ id }}">{{ path }}</option>{% endfor %}
+            </select></label>
+          {% else %}
+            <input type="hidden" name="use_inbox" value="true">
+            <p class="muted">第一則筆記會放在「收件匣 › 一般 › 隨手記」。</p>
+          {% endif %}
+          {% if note_templates %}
+            <label>套用範本<select name="template_id">
+              <option value="">空白筆記</option>
+              {% for template in note_templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
+            </select></label>
+          {% endif %}
+          <div class="inline"><button class="primary" type="submit">建立筆記</button><a class="button-link" href="/">取消</a></div>
+        </form>
       {% else %}
         <h3 class="heading" id="editor-heading">筆記工作區</h3>
         <p class="muted">已登入。你的筆記工作區已就緒。</p>
