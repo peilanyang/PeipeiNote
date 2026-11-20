@@ -92,6 +92,14 @@
       {% if selection %}
         <p class="crumb">{{ label }}</p>
         <h3 id="editor-heading">{{ selection.title if kind == 'note' else selection.name }}</h3>
+        {% if kind == 'note' %}
+          <nav class="inline" aria-label="筆記匯出">
+            <a class="button-link" href="/export/notes/{{ selection.id }}.docx">匯出 Word</a>
+            <a class="button-link" href="/print/notes/{{ selection.id }}">列印／另存 PDF</a>
+          </nav>
+        {% elif kind == 'notebook' %}
+          <a class="button-link" href="/export/notebooks/{{ selection.id }}.docx">匯出整本 Word</a>
+        {% endif %}
         {% if child_kind == 'section' %}
           <div class="rule">{{ create_form(child_kind, child_label, selection.id) }}</div>
         {% endif %}

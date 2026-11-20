@@ -15,6 +15,7 @@ from app.auth import (
     require_same_origin, revoke_session, session_active,
 )
 from app.database import Base, make_engine
+from app.exports import export_routes
 from app.library import library_routes
 from app.richtext import update_note_schema
 from app.search import initialize_search
@@ -71,6 +72,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
     app.include_router(workspace_actions(engine, settings))
     app.include_router(library_routes(engine, settings))
+    app.include_router(export_routes(engine, settings, db_path.parent / 'uploads'))
     app.include_router(attachment_routes(engine, settings, db_path.parent / 'uploads'))
 
     def remember_login(response: Response, token: str) -> None:

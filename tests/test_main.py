@@ -325,3 +325,71 @@ def test_search_tags_and_template_workflow(client: TestClient, credentials: dict
     assert "假期準備" not in client.get("/library/search", params={"q": "北海道"}).text
     submit(client, "/workspace/note/1/delete", confirmed="true")
     assert "北方之旅" not in client.get("/library/search", params={"q": "北海道"}).text
+
+
+def test_export_word_and_print(client: TestClient, credentials: dict[str, str]) -> None:
+    # 以實際上傳圖片與含表格的富文字驗證 Word 和列印輸出。
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    from docx import Document
+    from PIL import Image
+
+    assert client.get("/export/notes/1.docx").status_code == 401
+    assert client.get("/export/notebooks/1.docx").status_code == 401
+    assert client.get("/print/notes/1").status_code == 401
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/notebook", name="工作筆記")
+    submit(client, "/workspace/section", parent_id=1, name="專案清單")
+    submit(client, "/workspace/topic", parent_id=1, name="例會主題")
+    note_url = submit(client, "/workspace/note", parent_id=1, name="週五會議")
+    image = BytesIO()
+    Image.new("RGB", (80, 40), "blue").save(image, format="WEBP")
+    upload = client.post(
+        "/api/notes/1/files", content=image.getvalue(),
+        headers={"Origin": ORIGIN, "X-Filename": "test.webp"},
+    )
+    assert upload.status_code == 201
+    image_url = upload.json()["url"]
+    submit(
+        client, "/workspace/note/1/save", name="週五會議", content_format="html",
+        content=(
+            '<h2>會議摘要</h2><p><strong>重點</strong> <a href="https://example.com">參考</a></p>'
+            '<table><tr><th colspan="2">議程</th></tr><tr><td>時間</td><td>週五</td></tr></table>'
+            '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>完成事項</p></li></ul>'
+            f'<img src="{image_url}" alt="圖示" width="64"><script type="text/plain">不輸出</script>'
+        ),
+    )
+    assert "匯出 Word" in client.get(note_url).text
+    file = client.get("/export/notes/1.docx")
+    assert file.status_code == 200
+    assert file.headers["content-type"].endswith("wordprocessingml.document")
+    assert "filename*=UTF-8" in file.headers["content-disposition"]
+    document = Document(BytesIO(file.content))
+    assert document.paragraphs[0].text == "週五會議"
+    assert document.paragraphs[1].style.name == "Heading 2"
+    assert document.paragraphs[2].runs[0].bold
+    assert document.paragraphs[2].hyperlinks[0].url == "https://example.com"
+    assert document.tables[0].cell(0, 0).grid_span == 2
+    assert document.tables[0].cell(1, 1).text == "週五"
+    assert len(document.inline_shapes) == 1
+    assert any("☑ 完成事項" in p.text for p in document.paragraphs)
+    assert all("不輸出" not in p.text for p in document.paragraphs)
+
+    submit(client, "/workspace/note", parent_id=1, name="第二篇")
+    submit(client, "/workspace/note/2/save", name="第二篇", content="舊純文字 <保留>\n下一行")
+    book = client.get("/export/notebooks/1.docx")
+    assert book.status_code == 200
+    combined = Document(BytesIO(book.content))
+    for level, title in [(1, "專案清單"), (2, "例會主題"), (3, "週五會議")]:
+        assert any(p.text == title and p.style.name == f"Heading {level}" for p in combined.paragraphs)
+    assert any("舊純文字 <保留>\n下一行" == p.text for p in combined.paragraphs)
+    with ZipFile(BytesIO(book.content)) as package:
+        xml = package.read("word/document.xml").decode()
+        assert 'w:anchor="outline_3"' in xml and 'w:name="outline_3"' in xml
+    page = client.get("/print/notes/1")
+    assert page.status_code == 200 and page.headers["cache-control"] == "private, no-store"
+    assert "<table>" in page.text and f'src="{image_url}"' in page.text
+    assert 'class="workspace"' not in page.text and "不輸出" not in page.text
+    assert "舊純文字 &lt;保留&gt;" in client.get("/print/notes/2").text
+    assert client.get("/export/notebooks/99.docx").status_code == 404
