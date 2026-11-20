@@ -71,20 +71,6 @@
     {% elif mode == 'tags' %}
       <h2>標籤管理</h2>
       <div class="tag-layout">
-        <section class="tag-panel" aria-labelledby="tags-list-heading">
-          <h3 id="tags-list-heading">標籤列表</h3>
-          <ul class="tag-list">
-            {% for entry in items %}
-              <li class="tag-row{% if item and entry.id == item.id %} is-selected{% endif %}">
-                <a class="tag-row-title" href="/library/tags?selected={{ entry.id }}#tag-form"{% if item and entry.id == item.id %} aria-current="page"{% endif %}>{{ entry.name }}</a>
-                <span class="tag-actions">
-                  <a href="/library/search?tag={{ entry.id }}" aria-label="查看筆記：{{ entry.name }}">查看筆記</a>
-                  <a href="/library/tags?selected={{ entry.id }}#tag-form" aria-label="編輯標籤：{{ entry.name }}">編輯</a>
-                </span>
-              </li>
-            {% else %}<li class="muted">目前沒有標籤。</li>{% endfor %}
-          </ul>
-        </section>
         <section class="tag-panel" id="tag-form" aria-labelledby="tag-form-heading">
           {% if item %}
             <h3 id="tag-form-heading">編輯標籤</h3>
@@ -112,6 +98,20 @@
               <p class="muted">筆記本身會保留。</p>
             </details>
           {% endif %}
+        </section>
+        <section class="tag-panel" aria-labelledby="tags-list-heading">
+          <h3 id="tags-list-heading">標籤列表</h3>
+          <ul class="tag-list">
+            {% for entry in items %}
+              <li class="tag-row{% if item and entry.id == item.id %} is-selected{% endif %}">
+                <a class="tag-row-title" href="/library/tags?selected={{ entry.id }}#tag-form"{% if item and entry.id == item.id %} aria-current="page"{% endif %}>{{ entry.name }}</a>
+                <span class="tag-actions">
+                  <a href="/library/search?tag={{ entry.id }}" aria-label="查看筆記：{{ entry.name }}">查看筆記</a>
+                  <a href="/library/tags?selected={{ entry.id }}#tag-form" aria-label="編輯標籤：{{ entry.name }}">編輯</a>
+                </span>
+              </li>
+            {% else %}<li class="muted">目前沒有標籤。</li>{% endfor %}
+          </ul>
         </section>
       </div>
     {% else %}
