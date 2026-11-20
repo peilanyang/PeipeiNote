@@ -1,0 +1,117 @@
+import { Editor } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
+import { TaskItem, TaskList } from '@tiptap/extension-list';
+import { TableKit } from '@tiptap/extension-table';
+
+function allowedLink(value) {
+  if (!/^(https?:|mailto:)/i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'mailto:' ? Boolean(url.pathname) : Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+const source = document.querySelector('#note-content');
+const editorHost = document.querySelector('#rich-editor');
+const toolbar = document.querySelector('#rich-toolbar');
+const format = document.querySelector('#content-format');
+
+if (source && editorHost && toolbar && format) {
+  // 將舊筆記以純文字帶入編輯器，原本的尖括號仍是文字。
+  const content = format.value === 'html' ? source.value : {
+    type: 'doc',
+    content: source.value.replace(/\r\n?/g, '\n').split('\n').map(line => ({
+      type: 'paragraph',
+      ...(line ? { content: [{ type: 'text', text: line }] } : {}),
+    })),
+  };
+  const editor = new Editor({
+    element: editorHost,
+    content,
+    injectCSS: false,
+    parseOptions: { preserveWhitespace: "full" },
+    editorProps: {
+      attributes: { id: 'note-rich-content', role: 'textbox', 'aria-label': '內容', 'aria-multiline': 'true' },
+    },
+    extensions: [
+      StarterKit.configure({
+        heading: { levels: [1, 2, 3] },
+        link: { openOnClick: true, autolink: false, isAllowedUri: allowedLink },
+      }),
+      TableKit,
+      TaskList,
+      TaskItem.configure({ nested: true, HTMLAttributes: { "data-type": "taskItem" }, a11y: { checkboxLabel: (_, checked) => checked ? '已完成' : '未完成' } }),
+    ],
+  });
+
+  const styles = toolbar.querySelector('select');
+  const bold = toolbar.querySelector('[data-command="toggleBold"]');
+  const checklist = toolbar.querySelector('[data-command="toggleTaskList"]');
+  const tableButtons = toolbar.querySelectorAll('[data-table]');
+  function updateToolbar() {
+    styles.value = String([1, 2, 3].find(level => editor.isActive('heading', { level })) || 0);
+    bold.setAttribute('aria-pressed', String(editor.isActive('bold')));
+    checklist.setAttribute('aria-pressed', String(editor.isActive('taskList')));
+    for (const button of tableButtons) {
+      button.disabled = !editor.can()[button.dataset.command]();
+    }
+  }
+
+  const commands = {
+    toggleBold: () => editor.chain().focus().toggleBold().run(),
+    setHorizontalRule: () => editor.chain().focus().setHorizontalRule().run(),
+    toggleTaskList: () => editor.chain().focus().toggleTaskList().run(),
+    insertTable: () => editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run(),
+    addRowAfter: () => editor.chain().focus().addRowAfter().run(),
+    addColumnAfter: () => editor.chain().focus().addColumnAfter().run(),
+    deleteRow: () => editor.chain().focus().deleteRow().run(),
+    deleteColumn: () => editor.chain().focus().deleteColumn().run(),
+    deleteTable: () => editor.chain().focus().deleteTable().run(),
+    link: () => {
+      const entered = window.prompt('輸入完整網址，例如 https://example.com。留空可移除連結。', editor.getAttributes('link').href || '');
+      if (entered === null) return;
+      const url = entered.trim();
+      if (!url) {
+        editor.chain().focus().extendMarkRange('link').unsetLink().run();
+        return;
+      }
+      if (!allowedLink(url)) {
+        window.alert('請輸入 http://、https:// 或 mailto: 開頭的完整網址。');
+        return;
+      }
+      if (editor.state.selection.empty && !editor.isActive('link')) {
+        editor.chain().focus().insertContent({
+          type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }],
+        }).run();
+        return;
+      }
+      editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+    },
+  };
+
+  toolbar.addEventListener('mousedown', event => {
+    if (event.target.closest('button')) event.preventDefault();
+  });
+  toolbar.addEventListener('click', event => {
+    const button = event.target.closest('button[data-command]');
+    if (button) commands[button.dataset.command]();
+  });
+  styles.addEventListener('change', () => {
+    const level = Number(styles.value);
+    const chain = editor.chain().focus();
+    if (level) chain.setHeading({ level }).run();
+    else chain.setParagraph().run();
+  });
+  editor.on('transaction', updateToolbar);
+  updateToolbar();
+  source.form.addEventListener('submit', () => {
+    source.value = editor.getHTML();
+    format.value = 'html';
+  });
+  source.hidden = true;
+  editorHost.hidden = false;
+  toolbar.hidden = false;
+  document.querySelector('label[for="note-content"]').htmlFor = 'note-rich-content';
+}

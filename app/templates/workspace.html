@@ -50,6 +50,23 @@
     .stack label > input:not([type=checkbox]), .stack label > textarea, .stack label > select { margin-top: .3rem; }
     .inline { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .55rem; }
     textarea { min-height: 290px; resize: vertical; }
+    [hidden] { display: none !important; }
+    .rich-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; width: 100%; }
+    .rich-toolbar select { width: auto; padding: .45rem; }
+    .rich-toolbar button[aria-pressed=true] { background: var(--pale); border-color: var(--green); }
+    .rich-toolbar button:disabled { opacity: .52; cursor: default; }
+    .rich-editor { width: 100%; min-width: 0; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+    .rich-editor .tiptap { min-height: 290px; padding: .85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .tiptap p { margin: .35rem 0; }
+    .tiptap a { color: var(--green); text-decoration: underline; }
+    .tiptap table { border-collapse: collapse; width: 100%; table-layout: fixed; margin: .5rem 0; }
+    .tiptap :is(td, th) { border: 1px solid var(--line); padding: .28rem .45rem; vertical-align: top; }
+    .tiptap th, .tiptap .selectedCell { background: var(--pale); }
+    .tiptap ul[data-type=taskList] { list-style: none; padding-inline-start: 0; }
+    .tiptap li[data-type=taskItem] { display: flex; align-items: baseline; gap: .5rem; }
+    .stack .tiptap li[data-type=taskItem] > label { width: auto; }
+    .tiptap li[data-type=taskItem] > div { flex: 1; min-width: 0; }
+    .tiptap li[data-checked=true] > div { color: var(--muted); text-decoration: line-through; }
     .crumb { font-size: .85rem; color: var(--muted); margin-bottom: .3rem; }
     .nonempty { margin-top: .5rem; }
     @media (max-width: 780px) {
@@ -126,8 +143,32 @@
           <label>{{ '筆記標題' if kind == 'note' else label ~ '名稱' }}
             <input name="name" maxlength="200" value="{{ selection.title if kind == 'note' else selection.name }}" required>
           </label>
-          {% if kind == 'note' %}<label for="note-content">內容</label><textarea id="note-content" name="content" maxlength="100000">
-{{ selection.content }}</textarea>{% endif %}
+          {% if kind == 'note' %}
+            <label for="note-content">內容</label>
+            <div id="rich-toolbar" class="rich-toolbar" role="group" aria-label="文字格式" hidden>
+              <select aria-label="段落樣式">
+                <option value="0">純文字</option>
+                <option value="1">標題 1</option>
+                <option value="2">標題 2</option>
+                <option value="3">標題 3</option>
+              </select>
+              <button type="button" data-command="toggleBold" aria-pressed="false"><strong>粗體</strong></button>
+              <button type="button" data-command="setHorizontalRule">分隔線</button>
+              <button type="button" data-command="link">連結</button>
+              <button type="button" data-command="toggleTaskList" aria-pressed="false">待辦清單</button>
+              <button type="button" data-command="insertTable">插入表格</button>
+              <button type="button" data-table data-command="addRowAfter">加一列</button>
+              <button type="button" data-table data-command="deleteRow">刪除列</button>
+              <button type="button" data-table data-command="addColumnAfter">加一欄</button>
+              <button type="button" data-table data-command="deleteColumn">刪除欄</button>
+              <button type="button" data-table data-command="deleteTable">刪除表格</button>
+            </div>
+            <div id="rich-editor" class="rich-editor" hidden></div>
+            <input id="content-format" type="hidden" name="content_format" value="{{ selection.content_format }}">
+            <textarea id="note-content" name="content" maxlength="100000"{% if selection.content_format == 'html' %} readonly{% endif %}>
+{{ editor_content }}</textarea>
+            <script defer src="/static/editor.bundle.js"></script>
+          {% endif %}
           <button class="primary" type="submit">{{ '儲存筆記' if kind == 'note' else '儲存名稱' }}</button>
         </form>
         {% if destinations %}

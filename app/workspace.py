@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.auth import COOKIE, ROOT, Settings, require_same_origin, session_active
 from app.database import Attachment, Note, Notebook, NotebookPosition, Topic, TopicList
 
+from app.richtext import NoteFormat, clean_html, editor_source
+
 MAX_ID = 2**63 - 1
 NAME_LIMIT = 200
 CONTENT_LIMIT = 100_000
@@ -121,6 +123,8 @@ def render_workspace(request: Request, engine: Engine, kind: Kind | None, item_i
                 "topics_by_section": group_by(topics, "topic_list_id"), "notes": notes,
                 "active": active, "current_topic": items[Kind.topic].get(topic_id),
                 "selection": selection, "kind": kind.value if kind else None,
+                "editor_content": editor_source(selection.content, selection.content_format)
+                if isinstance(selection, Note) else "",
                 "label": LEVELS[kind].label if kind else None,
                 "child_kind": child.value if child else None, "child_label": LEVELS[child].label if child else None,
                 "destinations": destinations,
@@ -140,8 +144,8 @@ def group_by(rows: list[TopicList] | list[Topic], key: str) -> dict[int, list[To
     return grouped
 
 
-def save_fields(item: Item, name: str, content: str) -> None:
-    # 名稱與純文字內容會透過 ORM 儲存，顯示時交由範本轉義。
+def save_fields(item: Item, name: str, content: str, content_format: NoteFormat = "plain") -> None:
+    # 純文字原樣儲存，富文字先經過 HTML 允許清單淨化。
     name = name.strip()
     if not 1 <= len(name) <= NAME_LIMIT:
         raise HTTPException(422, "名稱須為 1 至 200 個字元。")
@@ -149,7 +153,8 @@ def save_fields(item: Item, name: str, content: str) -> None:
         if len(content) > CONTENT_LIMIT:
             raise HTTPException(422, "筆記超過 100,000 個字元。")
         item.title = name
-        item.content = content
+        item.content = clean_html(content) if content_format == "html" else content
+        item.content_format = content_format
     else:
         item.name = name
 
@@ -228,6 +233,7 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
         action: Action,
         name: Annotated[str, Form()] = "",
         content: Annotated[str, Form()] = "",
+        content_format: Annotated[NoteFormat, Form()] = "plain",
         target_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         direction: Annotated[int, Form(ge=-1, le=1)] = 0,
         confirmed: Annotated[bool, Form()] = False,
@@ -240,7 +246,7 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             item = get_item(db, kind, item_id)
             if action == Action.save:
-                save_fields(item, name, content)
+                save_fields(item, name, content, content_format)
             elif action == Action.move:
                 if level.parent is None:
                     move_notebook(db, item_id, direction)

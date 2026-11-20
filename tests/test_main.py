@@ -184,3 +184,28 @@ def test_workspace_guards_mutations_and_preserves_children(
     result = client.get(book).text
     assert "原有筆記本" in result and "要保留的清單" in result
     assert "跨站" not in result
+
+
+def test_workspace_sanitizes_html_before_storing(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path,
+) -> None:
+    # 驗證真正的儲存入口與 SQLite 欄位，舊格式的純文字入口仍有原有行為。
+    from sqlite3 import connect
+
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/notebook", name="格式")
+    submit(client, "/workspace/section", parent_id=1, name="清單")
+    submit(client, "/workspace/topic", parent_id=1, name="主題")
+    note = submit(client, "/workspace/note", parent_id=1, name="內容")
+    submit(client, "/workspace/note/1/save", name="內容", content="<b>舊純文字</b>")
+    assert "&lt;b&gt;舊純文字&lt;/b&gt;" in client.get(note).text
+    submit(
+        client, "/workspace/note/1/save", name="內容", content_format="html",
+        content='<h1 onerror="">段落</h1><script type="text/plain">標記</script>',
+    )
+    with connect(tmp_path / "test.db") as db:
+        assert db.execute("SELECT content, content_format FROM notes").fetchone() == ("<h1>段落</h1>", "html")
+    result = client.get(note).text
+    assert "&lt;h1&gt;段落&lt;/h1&gt;" in result
+    assert "/static/editor.bundle.js" in result
+    assert client.get("/static/editor.bundle.js").status_code == 200

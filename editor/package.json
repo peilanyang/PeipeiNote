@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "esbuild editor.js --bundle --minify --legal-comments=eof --outfile=../app/static/editor.bundle.js && node licenses.mjs"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.34.0",
+    "@tiptap/extension-list": "3.34.0",
+    "@tiptap/extension-table": "3.34.0",
+    "@tiptap/pm": "3.34.0",
+    "@tiptap/starter-kit": "3.34.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

@@ -47,6 +47,7 @@ class Note(Base):
     topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
     title: Mapped[str]
     content: Mapped[str] = mapped_column(default="")
+    content_format: Mapped[str] = mapped_column(server_default="plain")
 
 
 class Tag(Base):

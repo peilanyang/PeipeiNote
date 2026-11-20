@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.auth import (
@@ -13,6 +14,7 @@ from app.auth import (
     require_same_origin, revoke_session, session_active,
 )
 from app.database import Base, make_engine
+from app.richtext import update_note_schema
 from app.workspace import MAX_ID, Kind, render_workspace, workspace_actions
 
 
@@ -53,6 +55,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # 啟動時建立資料表，關閉時釋放資料庫連線。
         Base.metadata.create_all(engine)
+        update_note_schema(engine)
         try:
             yield
         finally:
@@ -61,6 +64,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[site.hostname])
 
+    app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
     app.include_router(workspace_actions(engine, settings))
 
     def remember_login(response: Response, token: str) -> None:
