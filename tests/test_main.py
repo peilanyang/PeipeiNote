@@ -209,3 +209,63 @@ def test_workspace_sanitizes_html_before_storing(
     assert "&lt;h1&gt;段落&lt;/h1&gt;" in result
     assert "/static/editor.bundle.js" in result
     assert client.get("/static/editor.bundle.js").status_code == 200
+
+
+def test_private_attachments_lifecycle(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 驗證檔案識別、大小、CSRF、圖片內嵌與登入後的下載和移除。
+    from io import BytesIO
+    from urllib.parse import quote
+    from PIL import Image
+    from app import attachments
+
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/notebook", name="附件")
+    submit(client, "/workspace/section", parent_id=1, name="清單")
+    submit(client, "/workspace/topic", parent_id=1, name="主題")
+    note = submit(client, "/workspace/note", parent_id=1, name="筆記")
+    upload = "/api/notes/1/files"
+    headers = {"Origin": ORIGIN}
+    fake = client.post(upload, content=b"plain text", headers={**headers, "X-Filename": quote("假.pdf")})
+    assert fake.status_code == 415
+    assert client.post(upload, headers={"X-Filename": "file.txt"}, content=b"hey").status_code == 403
+    with monkeypatch.context() as limits:
+        limits.setattr(attachments, "MAX_FILE_BYTES", 3)
+        assert client.post(upload, content=b"four", headers={**headers, "X-Filename": quote("file.txt")}).status_code == 413
+    image = BytesIO()
+    Image.new("RGB", (2, 2)).save(image, format="PNG")
+    picture = client.post(upload, content=image.getvalue(), headers={**headers, "X-Filename": quote("圖片.png")})
+    assert picture.status_code == 201
+    info = picture.json()
+    assert attachments.FILE_ID.fullmatch(info["id"])
+    assert info["name"] == "圖片.png"
+    assert (tmp_path / "uploads" / info["id"]).read_bytes() == image.getvalue()
+    picture_url = info["url"]
+    assert client.get(picture_url).headers["content-disposition"].startswith("inline")
+    assert client.get(picture_url + "?download=true").headers["content-disposition"].startswith("attachment")
+    disguised = client.post(
+        upload, content=b"%PDF-1.7\n%%EOF\n", headers={**headers, "X-Filename": quote("假.pdf")},
+    )
+    assert disguised.status_code == 415
+    document = BytesIO()
+    Image.new("RGB", (2, 2)).save(document, format="PDF")
+    pdf = client.post(upload, content=document.getvalue(), headers={**headers, "X-Filename": quote("手冊.pdf")})
+    assert pdf.status_code == 201
+    pdf_url = pdf.json()["url"]
+    assert client.get(pdf_url).headers["content-disposition"].startswith("attachment")
+    assert "手冊.pdf" in client.get(note).text
+
+    submit(client, "/workspace/note/1/save", name="筆記", content_format="html",
+           content=f'<img src="{picture_url}" alt="圖片"><img src="https://example.com/a.png">')
+    markup = client.get(note).text
+    assert f'src=&#34;{picture_url}' in markup
+    assert "https://example.com/a.png" not in markup
+    assert client.post(picture_url + "/delete", headers=headers).status_code == 409
+    submit(client, "/workspace/note/1/save", name="筆記", content_format="html", content="<p>更新</p>")
+    assert submit(client, picture_url + "/delete") == note
+    assert client.get(picture_url).status_code == 404
+    assert not (tmp_path / "uploads" / info["id"]).exists()
+    submit(client, "/logout")
+    assert client.get(pdf_url).status_code == 401
+    assert client.post(upload, content=b"test", headers={**headers, "X-Filename": quote("file.txt")}).status_code == 401

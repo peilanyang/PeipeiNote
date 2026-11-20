@@ -29,7 +29,7 @@ def test_cleaner_strips_active_markup() -> None:
         '<a href="//example.com">相對網址</a>'
     )
     cleaned = clean_html(source)
-    assert cleaned == '<p>保留文字</p><a rel="noopener noreferrer">相對網址</a>'
+    assert cleaned == '<p>保留文字</p><img alt="圖片"><a rel="noopener noreferrer">相對網址</a>'
     assert editor_source(source, "html") == cleaned
     assert editor_source(source, "plain") == source
 

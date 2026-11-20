@@ -1,7 +1,18 @@
 import { Editor } from '@tiptap/core';
+import Image from '@tiptap/extension-image';
 import StarterKit from '@tiptap/starter-kit';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { TableKit } from '@tiptap/extension-table';
+
+const PrivateImage = Image.extend({
+  parseHTML() {
+    return [{
+      tag: 'img[src]',
+      getAttrs: element => /^\/api\/files\/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)$/.test(element.getAttribute('src'))
+        ? null : false,
+    }];
+  },
+});
 
 function allowedLink(value) {
   if (!/^(https?:|mailto:)/i.test(value)) return false;
@@ -33,6 +44,20 @@ if (source && editorHost && toolbar && format) {
     injectCSS: false,
     parseOptions: { preserveWhitespace: "full" },
     editorProps: {
+      handlePaste(_view, event) {
+        const files = Array.from(event.clipboardData?.files || []);
+        if (!files.length) return false;
+        void uploadFiles(files);
+        return true;
+      },
+      handleDrop(view, event) {
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (!files.length) return false;
+        const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+        if (at) editor.commands.setTextSelection(at.pos);
+        void uploadFiles(files);
+        return true;
+      },
       attributes: { id: 'note-rich-content', role: 'textbox', 'aria-label': '內容', 'aria-multiline': 'true' },
     },
     extensions: [
@@ -41,10 +66,81 @@ if (source && editorHost && toolbar && format) {
         link: { openOnClick: true, autolink: false, isAllowedUri: allowedLink },
       }),
       TableKit,
+      PrivateImage,
       TaskList,
       TaskItem.configure({ nested: true, HTMLAttributes: { "data-type": "taskItem" }, a11y: { checkboxLabel: (_, checked) => checked ? '已完成' : '未完成' } }),
     ],
   });
+
+  const picker = document.querySelector('#attachment-picker');
+  const choose = document.querySelector('#choose-attachments');
+  const fileInput = document.querySelector('#attachment-input');
+  const fileList = document.querySelector('#attachment-list');
+  const status = document.querySelector('#attachment-status');
+  const save = source.form.querySelector('button[type="submit"]');
+  let uploading = false;
+
+  function showAttachment(file) {
+    const item = document.createElement('li');
+    const link = document.createElement('a');
+    link.href = file.url + '?download=true';
+    link.textContent = file.name;
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = file.url + '/delete';
+    const remove = document.createElement('button');
+    remove.type = 'submit';
+    remove.textContent = '移除';
+    remove.setAttribute('aria-label', '移除附件 ' + file.name);
+    form.append(remove);
+    item.append(link, form);
+    fileList.append(item);
+  }
+
+  async function uploadFiles(files) {
+    if (!files.length || uploading) return;
+    uploading = true;
+    choose.disabled = true;
+    save.disabled = true;
+    status.textContent = '正在上傳…';
+    const errors = [];
+    let inserted = false;
+    try {
+      for (const file of files) {
+        try {
+          if (file.size > 20 * 1024 * 1024) throw new Error('單檔限 20 MB。');
+          const result = await fetch(editorHost.dataset.uploadUrl, {
+            method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file,
+          });
+          if (!result.ok) {
+            const details = await result.json().catch(() => null);
+            throw new Error(typeof details?.detail === 'string' ? details.detail : '上傳失敗。');
+          }
+          const entry = await result.json();
+          showAttachment(entry);
+          if (entry.media_type.startsWith('image/')) {
+            inserted = editor.chain().focus().setImage({ src: entry.url, alt: entry.name }).run() || inserted;
+          }
+        } catch (error) {
+          errors.push(file.name + '：' + error.message);
+        }
+      }
+      status.textContent = errors.length ? errors.join('　') + (inserted ? '　請儲存已插入的圖片。' : '')
+        : inserted ? '已插入圖片。請按「儲存筆記」。' : '附件已上傳。';
+    } finally {
+      uploading = false;
+      choose.disabled = false;
+      save.disabled = false;
+    }
+  }
+
+  choose.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    const files = Array.from(fileInput.files);
+    fileInput.value = '';
+    void uploadFiles(files);
+  });
+  picker.hidden = false;
 
   const styles = toolbar.querySelector('select');
   const bold = toolbar.querySelector('[data-command="toggleBold"]');

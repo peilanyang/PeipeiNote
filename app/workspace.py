@@ -123,6 +123,9 @@ def render_workspace(request: Request, engine: Engine, kind: Kind | None, item_i
                 "topics_by_section": group_by(topics, "topic_list_id"), "notes": notes,
                 "active": active, "current_topic": items[Kind.topic].get(topic_id),
                 "selection": selection, "kind": kind.value if kind else None,
+                "attachments": list(db.scalars(select(Attachment).where(
+                    Attachment.note_id == selection.id
+                ).order_by(Attachment.id))) if isinstance(selection, Note) else [],
                 "editor_content": editor_source(selection.content, selection.content_format)
                 if isinstance(selection, Note) else "",
                 "label": LEVELS[kind].label if kind else None,

@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from app.attachments import attachment_routes
 from app.auth import (
     COOKIE, COOKIE_SECONDS, ROOT, Settings, authenticate, read_settings,
     require_same_origin, revoke_session, session_active,
@@ -66,6 +67,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
     app.include_router(workspace_actions(engine, settings))
+    app.include_router(attachment_routes(engine, settings, db_path.parent / 'uploads'))
 
     def remember_login(response: Response, token: str) -> None:
         # 進入首頁時續存瀏覽器 Cookie。

@@ -124,6 +124,12 @@
       .panel.editor { border-left: 0; border-top: 1px solid var(--line); }
     }
     @media (max-width: 480px) { header { padding-inline: .75rem; } }
+    .tiptap img { max-width: 100%; height: auto; display: block; margin: .5rem 0; }
+    .file-picker { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; }
+    .file-list { padding-left: 1.2rem; }
+    .file-list li { margin-block: .4rem; overflow-wrap: anywhere; }
+    .file-list a { color: var(--green); text-decoration: underline; }
+    .file-list form { display: inline-block; margin-left: .5rem; }
   </style>
 </head>
 <body>
@@ -205,7 +211,7 @@
           </label>
           {% if kind == 'note' %}
             <label for="note-content">內容</label>
-            <div id="rich-editor" class="rich-editor" hidden></div>
+            <div id="rich-editor" class="rich-editor" data-upload-url="/api/notes/{{ selection.id }}/files" hidden></div>
             <input id="content-format" type="hidden" name="content_format" value="{{ selection.content_format }}">
             <textarea id="note-content" name="content" maxlength="100000"{% if selection.content_format == 'html' %} readonly{% endif %}>
 {{ editor_content }}</textarea>
@@ -232,6 +238,25 @@
           <button class="primary" type="submit">{{ '儲存筆記' if kind == 'note' else '儲存名稱' }}</button>
         </form>
         {% if kind == 'note' %}
+          <section class="rule" aria-labelledby="attachments-heading">
+            <h2 id="attachments-heading">附件</h2>
+            <div class="file-picker" id="attachment-picker" hidden>
+              <button type="button" id="choose-attachments">上傳附件</button>
+              <input type="file" id="attachment-input" accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.txt,.zip" multiple hidden>
+              <span class="muted">圖片也可直接貼上或拖入內容，單檔限 20 MB。</span>
+            </div>
+            <p id="attachment-status" role="status" aria-live="polite"></p>
+            <ul id="attachment-list" class="file-list">
+              {% for file in attachments %}
+                <li>
+                  <a href="/api/files/{{ file.storage_name }}?download=true">{{ file.original_name }}</a>
+                  <form method="post" action="/api/files/{{ file.storage_name }}/delete">
+                    <button type="submit" aria-label="移除附件 {{ file.original_name }}">移除</button>
+                  </form>
+                </li>
+              {% endfor %}
+            </ul>
+          </section>
           <details class="rule editor-actions">
             <summary>管理筆記（移動或刪除）</summary>
         {% endif %}

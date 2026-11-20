@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from nh3 import Cleaner
@@ -6,20 +7,29 @@ from sqlalchemy.engine import Engine
 
 NoteFormat = Literal["plain", "html"]
 
+def filter_attribute(tag: str, name: str, value: str) -> str | None:
+    # 圖片只可引用經過登入保護的站內圖片位址。
+    if tag == "img" and name == "src":
+        if not re.fullmatch(r"/api/files/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)", value):
+            return None
+    return value
+
+
 cleaner = Cleaner(
     tags={
         "p", "br", "h1", "h2", "h3", "strong", "b", "em", "i", "u", "s", "hr",
         "a", "ul", "ol", "li", "blockquote", "pre", "code", "div", "span",
-        "table", "thead", "tbody", "tfoot", "tr", "th", "td",
+        "table", "thead", "tbody", "tfoot", "tr", "th", "td", "img",
     },
     clean_content_tags={"script", "style", "iframe", "object", "svg", "math", "template"},
-    attributes={"a": {"href"}, "ol": {"start"}, "td": {"colspan", "rowspan"}, "th": {"colspan", "rowspan"}},
+    attribute_filter=filter_attribute,
+    attributes={"img": {"src", "alt"}, "a": {"href"}, "ol": {"start"}, "td": {"colspan", "rowspan"}, "th": {"colspan", "rowspan"}},
     tag_attribute_values={
         "ul": {"data-type": {"taskList"}},
         "li": {"data-type": {"taskItem"}, "data-checked": {"true", "false"}},
     },
     url_schemes={"http", "https", "mailto"},
-    url_relative="deny",
+    url_relative=lambda value: value if re.fullmatch(r"/api/files/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)", value) else None,
 )
 
 
