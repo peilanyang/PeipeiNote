@@ -165,7 +165,8 @@ def render_workspace(
                 "attachments": list(db.scalars(notebook_items(Attachment, user_id).where(
                     Attachment.note_id == selection.id
                 ).order_by(Attachment.id))) if isinstance(selection, Note) else [],
-                "tags": tags, "assigned_tag_ids": assigned_tag_ids, "assigned_tags": assigned_tags,
+                "tags": tags, "assigned_tags": assigned_tags,
+                "available_tags": [tag for tag in tags if tag.id not in assigned_tag_ids],
                 "note_templates": db.execute(select(Template.id, Template.name).where(
                     visible_to(Template, user_id)
                 ).order_by(Template.name)).all() if topic_id or (new_note and selection is None) else [],

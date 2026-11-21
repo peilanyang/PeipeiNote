@@ -72,6 +72,25 @@ def test_lockout(client: TestClient, credentials: dict[str, str], monkeypatch: p
     assert client.post("/login", data=credentials, headers=headers, follow_redirects=False).status_code == 303
 
 
+def test_login_uses_only_trusted_proxy_client_address(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path,
+) -> None:
+    # 驗證 README 指定的 Uvicorn 代理信任範圍會傳遞到登入計數。
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    proxy_app = ProxyHeadersMiddleware(client.app, trusted_hosts="127.0.0.1")
+    headers = {"Origin": ORIGIN, "X-Forwarded-For": "198.51.100.10"}
+    invalid = {**credentials, "password": secrets.token_urlsafe(24)}
+    trusted = TestClient(proxy_app, base_url=ORIGIN, client=("127.0.0.1", 50000))
+    direct = TestClient(proxy_app, base_url=ORIGIN, client=("192.0.2.10", 50000))
+    assert trusted.post("/login", data=invalid, headers=headers).status_code == 401
+    assert direct.post("/login", data=invalid, headers=headers).status_code == 401
+    with closing(sqlite3.connect(tmp_path / "test.db")) as database:
+        assert database.execute("SELECT ip, failures FROM login_attempts ORDER BY ip").fetchall() == [
+            ("192.0.2.10", 1), ("198.51.100.10", 1),
+        ]
+
+
 def test_csrf_and_invalid_session(client: TestClient, credentials: dict[str, str]) -> None:
     # 跨站或缺少來源時拒絕變更登入狀態，無效 Cookie 無法讀取首頁。
     assert client.post("/login", data=credentials, headers={"Origin": "https://elsewhere.test"}).status_code == 403
@@ -81,17 +100,44 @@ def test_csrf_and_invalid_session(client: TestClient, credentials: dict[str, str
     assert client.get("/", follow_redirects=False).status_code == 303
 
 
-def test_session_survives_past_original_timeout(client: TestClient, credentials: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    # 模擬超過原本的 8 小時，確認登入仍有效。
+def test_session_expires_on_server(
+    client: TestClient, credentials: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    # 即使客戶端保留 Cookie，伺服器也會在到期時拒絕憑證。
     clock = SimpleNamespace(now=10_000)
     monkeypatch.setattr(auth, "time", SimpleNamespace(time=lambda: clock.now))
     client.post("/login", data=credentials, headers={"Origin": ORIGIN}).raise_for_status()
     assert "已登入" in client.get("/").text
-    clock.now += 30 * 24 * 60 * 60
+    clock.now += auth.COOKIE_SECONDS - 1
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 200
     assert "已登入" in response.text
-    assert f"Max-Age={auth.COOKIE_SECONDS}" in response.headers["set-cookie"]
+    assert "set-cookie" not in response.headers
+    clock.now += 1
+    assert client.get("/", follow_redirects=False).status_code == 303
+
+    # 現有資料庫中未設期限的舊工作階段在升級後也會失效。
+    client.post("/login", data=credentials, headers={"Origin": ORIGIN}).raise_for_status()
+    assert client.get("/", follow_redirects=False).status_code == 200
+    with closing(sqlite3.connect(tmp_path / "test.db")) as database, database:
+        database.execute("UPDATE login_sessions SET expires_at = 0")
+    assert client.get("/", follow_redirects=False).status_code == 303
+
+
+def test_password_verification_does_not_hold_sqlite_write_lock(
+    client: TestClient, credentials: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    # 實際驗證密碼時，另一條 SQLite 連線仍可取得寫入鎖。
+    original = auth.hasher
+
+    def verify(password_hash: str, password: str) -> bool:
+        with closing(sqlite3.connect(tmp_path / "test.db", timeout=0.2)) as database:
+            database.execute("BEGIN IMMEDIATE")
+            database.rollback()
+        return original.verify(password_hash, password)
+
+    monkeypatch.setattr(auth, "hasher", SimpleNamespace(verify=verify))
+    submit(client, "/login", **credentials)
 
 
 def test_unconfigured_app(tmp_path: Path) -> None:
@@ -381,7 +427,9 @@ def test_private_attachments_lifecycle(
     # 驗證檔案識別、大小、CSRF、圖片內嵌與登入後的下載和移除。
     from io import BytesIO
     from urllib.parse import quote
+    from docx import Document
     from PIL import Image
+    from pypdf import PdfWriter
     from app import attachments
 
     submit(client, "/login", **credentials)
@@ -412,6 +460,28 @@ def test_private_attachments_lifecycle(
         upload, content=b"%PDF-1.7\n%%EOF\n", headers={**headers, "X-Filename": quote("假.pdf")},
     )
     assert disguised.status_code == 415
+    empty_pdf = BytesIO()
+    with PdfWriter() as writer:
+        writer.write(empty_pdf)
+    assert client.post(upload, content=empty_pdf.getvalue(), headers={
+        **headers, "X-Filename": "no-pages.pdf",
+    }).status_code == 415
+
+    # 僅有幾個預期的部件名稱，無法替代完整的 Word 結構。
+    invalid_docx = BytesIO()
+    with ZipFile(invalid_docx, "w") as package:
+        for name in ("[Content_Types].xml", "_rels/.rels", "word/document.xml"):
+            package.writestr(name, "<empty/>")
+    docx_headers = {**headers, "X-Filename": "document.docx"}
+    assert client.post(upload, content=invalid_docx.getvalue(), headers=docx_headers).status_code == 415
+    valid_docx = BytesIO()
+    docx = Document()
+    docx.add_paragraph("測試文件")
+    docx.save(valid_docx)
+    attached_docx = client.post(upload, content=valid_docx.getvalue(), headers=docx_headers)
+    assert attached_docx.status_code == 201
+    assert client.get(attached_docx.json()["url"]).content == valid_docx.getvalue()
+
     document = BytesIO()
     Image.new("RGB", (2, 2)).save(document, format="PDF")
     pdf = client.post(upload, content=document.getvalue(), headers={**headers, "X-Filename": quote("手冊.pdf")})

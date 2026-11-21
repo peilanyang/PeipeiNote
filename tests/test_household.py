@@ -122,9 +122,10 @@ def test_sharing_grants_and_revokes_content_and_attachment_access(family: tuple[
     file_route = f"/api/notes/{note}/files"
     png = BytesIO()
     Image.new("RGB", (2, 2)).save(png, format="PNG")
-    pdf = b"%PDF-1.4\nxref\nstartxref\n9\n%%EOF\n"
+    pdf = BytesIO()
+    Image.new("RGB", (2, 2)).save(pdf, format="PDF")
     files = []
-    for filename, data in (("family.png", png.getvalue()), ("family.pdf", pdf)):
+    for filename, data in (("family.png", png.getvalue()), ("family.pdf", pdf.getvalue())):
         headers = {**HEADERS, "X-Filename": filename}
         created = b.post(file_route, content=data, headers=headers)
         assert created.status_code == 201, created.text
@@ -151,7 +152,11 @@ def test_sharing_grants_and_revokes_content_and_attachment_access(family: tuple[
         assert a.get(f"{file_url}?download=true").content == data
     added = submit(a, "/workspace/note", name="甲新增給家人", parent_id=topic)
     assert b.get(added).status_code == 200
-    assert "家庭行程" in a.get(note_url).text
+    own_tag = int(submit(a, "/library/tags", name="甲的標籤").split("=")[-1])
+    shared_note = a.get(note_url).text
+    assert "家庭行程" in shared_note
+    assert f'<option value="{own_tag}">甲的標籤</option>' in shared_note
+    submit(a, f"/library/notes/{note}/tags", tag_id=own_tag, action="add")
     tagged = a.get(f"/library/search?tag={tag}")
     assert tagged.status_code == 200 and "乙的待共享筆記" in tagged.text
     assert "乙的另一個私人" not in tagged.text
@@ -182,6 +187,37 @@ def test_sharing_grants_and_revokes_content_and_attachment_access(family: tuple[
         assert a.get(path).status_code == 404, path
     assert b.get(added).status_code == 200
     assert "乙的待共享" not in a.get("/").text
+
+
+def test_word_exports_respect_attachment_access_after_unsharing(family: tuple[TestClient, TestClient]) -> None:
+    # 共用期間可匯出圖片，收回共用後已有的圖片參照也必須重新驗權。
+    owner, partner = family
+    source_book, _, _, source_note = create_hierarchy(owner, "圖片來源")
+    book, _, _, note = create_hierarchy(partner, "引用圖片")
+    picture = BytesIO()
+    Image.new("RGB", (2, 2)).save(picture, format="PNG")
+    uploaded = owner.post(
+        f"/api/notes/{source_note}/files", content=picture.getvalue(),
+        headers={**HEADERS, "X-Filename": "photo.png"},
+    )
+    assert uploaded.status_code == 201
+    image_url = uploaded.json()["url"]
+    share = f"/workspace/notebook/{source_book}/share"
+    submit(owner, share, is_shared="true")
+    assert partner.get(image_url).status_code == 200
+    submit(partner, f"/workspace/note/{note}/save", name="引用圖片", content_format="html",
+           content=f'<img src="{image_url}" alt="共用圖片">')
+    for path in (f"/export/notes/{note}.docx", f"/export/notebooks/{book}.docx"):
+        response = partner.get(path)
+        assert response.status_code == 200
+        assert len(Document(BytesIO(response.content)).inline_shapes) == 1
+
+    submit(owner, share, is_shared="false")
+    assert partner.get(image_url).status_code == 404
+    for path in (f"/export/notes/{note}.docx", f"/export/notebooks/{book}.docx"):
+        response = partner.get(path)
+        assert response.status_code == 200
+        assert len(Document(BytesIO(response.content)).inline_shapes) == 0
 
 
 def test_shared_template_and_tag_can_be_used_but_only_owner_manages_them(family: tuple[TestClient, TestClient]) -> None:
@@ -276,3 +312,37 @@ def test_web_backup_stays_disabled_after_partner_is_removed(
         assert 'action="/backup"' not in homepage.text
         assert "曾啟用的伴侶" not in homepage.text
         assert browser.post("/backup", headers=HEADERS).status_code == 403
+
+    replacement = replace(settings, partner_username="different-person")
+    with pytest.raises(RuntimeError, match="第二帳號的名稱不符原有資料歸屬"):
+        with TestClient(create_app(replacement, database), base_url=ORIGIN):
+            pytest.fail("新的身分不得使用已保留的槽位")
+
+    # 同一使用者可換密碼後恢復登入，原有所有權不變。
+    new_password = secrets.token_urlsafe(24)
+    restored = replace(settings, partner_password_hash=auth.hasher.hash(new_password))
+    with TestClient(create_app(restored, database), base_url=ORIGIN) as browser:
+        submit(browser, "/login", username=partner["username"], password=new_password)
+        assert "曾啟用的伴侶" in browser.get("/").text
+
+
+def test_legacy_inactive_partner_slot_cannot_be_reassigned(
+    tmp_path: Path, accounts: tuple[auth.Settings, dict[str, str], dict[str, str]],
+) -> None:
+    # 舊資料只有帳號槽位且已停用時，保留私人筆記並拒絕自動重綁。
+    database = tmp_path / "legacy-family.db"
+    settings, primary, partner = accounts
+    with TestClient(create_app(settings, database), base_url=ORIGIN) as browser:
+        submit(browser, "/login", **partner)
+        create_hierarchy(browser, "保留的私人資料")
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("ALTER TABLE users DROP COLUMN username")
+    single = replace(settings, partner_username="", partner_password_hash="")
+    with TestClient(create_app(single, database), base_url=ORIGIN) as browser:
+        submit(browser, "/login", **primary)
+        assert "保留的私人資料" not in browser.get("/").text
+    with pytest.raises(RuntimeError, match="第二帳號的名稱不符原有資料歸屬"):
+        with TestClient(create_app(settings, database), base_url=ORIGIN):
+            pytest.fail("缺少舊名稱時應交由本機管理員處理")
+    with closing(sqlite3.connect(database)) as db:
+        assert db.execute("SELECT owner_id, name FROM notebooks").fetchall() == [(2, "保留的私人資料筆記本")]

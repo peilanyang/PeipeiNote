@@ -12,7 +12,7 @@ def test_database_schema_and_foreign_keys(tmp_path: Path) -> None:
     # 建立四層結構，驗證標籤關聯與 SQLite 對孤兒筆記的攔截。
     engine = make_engine(tmp_path / "test.db")
     try:
-        initialize_household(engine, partner_enabled=False)
+        initialize_household(engine)
         assert {
             "notebooks", "notebook_positions", "topic_lists", "topics", "notes", "tags", "note_tags",
             "templates", "attachments", "login_attempts", "login_sessions", "users",
@@ -42,7 +42,7 @@ def test_wal_allows_writes_during_a_read_snapshot(tmp_path: Path) -> None:
     # 每條連線等候寫入鎖，讀取交易期間另一條連線仍能提交。
     engine = make_engine(tmp_path / "wal.db")
     try:
-        initialize_household(engine, partner_enabled=False)
+        initialize_household(engine)
         with engine.connect() as reader, engine.connect() as writer:
             for connection in (reader, writer):
                 assert connection.exec_driver_sql("PRAGMA journal_mode").scalar_one() == "wal"

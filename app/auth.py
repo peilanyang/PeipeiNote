@@ -5,6 +5,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import BoundedSemaphore
 from urllib.parse import urlsplit
 
 from argon2 import PasswordHasher, extract_parameters
@@ -23,6 +24,7 @@ COOKIE = "peipeinote_session"
 COOKIE_SECONDS = 365 * 24 * 60 * 60
 LOCK_SECONDS = 15 * 60
 FAILURE_LIMIT = 5
+PASSWORD_CHECK_SLOTS = BoundedSemaphore(4)
 hasher = PasswordHasher()
 logger = logging.getLogger("uvicorn.error")
 
@@ -99,7 +101,29 @@ def session_digest(settings: Settings, token: str) -> str:
 def authenticate(
     engine: Engine, settings: Settings, ip: str, username: str, password: str
 ) -> tuple[str | None, int]:
-    # 以 SQLite 寫入鎖序列化計數，避免同時送出的請求跳過鎖定。
+    # 先用短查詢拒絕已鎖定的 IP，避免未必要的密碼雜湊與寫入鎖。
+    with Session(engine) as db:
+        now = int(time.time())
+        attempt = db.get(LoginAttempt, ip)
+        if attempt and attempt.locked_until > now:
+            return None, attempt.locked_until - now
+
+    # 每個程序只允許少量並行密碼驗證，雜湊期間不占用 SQLite 寫入鎖。
+    if not PASSWORD_CHECK_SLOTS.acquire(blocking=False):
+        return None, 1
+    try:
+        partner = settings.partner_enabled and hmac.compare_digest(settings.partner_username.encode(), username.encode())
+        user_id = 2 if partner else 1
+        password_hash = settings.partner_password_hash if partner else settings.password_hash
+        try:
+            valid_password = len(password) <= 1024 and hasher.verify(password_hash, password)
+        except (VerificationError, InvalidHashError):
+            valid_password = False
+    finally:
+        PASSWORD_CHECK_SLOTS.release()
+    valid_user = partner or hmac.compare_digest(settings.username.encode(), username.encode())
+
+    # 寫入時重新讀取鎖定狀態，同時到達的請求也不能略過第五次失敗。
     with Session(engine) as db, db.begin():
         db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         now = int(time.time())
@@ -110,20 +134,12 @@ def authenticate(
             attempt.failures = 0
             attempt.locked_until = 0
 
-        partner = settings.partner_enabled and hmac.compare_digest(settings.partner_username.encode(), username.encode())
-        user_id = 2 if partner else 1
-        password_hash = settings.partner_password_hash if partner else settings.password_hash
-        try:
-            valid_password = len(password) <= 1024 and hasher.verify(password_hash, password)
-        except (VerificationError, InvalidHashError):
-            valid_password = False
-        valid_user = partner or hmac.compare_digest(settings.username.encode(), username.encode())
         if valid_password and valid_user:
             if attempt:
                 db.delete(attempt)
-            db.execute(delete(LoginSession).where(LoginSession.expires_at > 0, LoginSession.expires_at <= now))
+            db.execute(delete(LoginSession).where(LoginSession.expires_at <= now))
             token = secrets.token_urlsafe(32)
-            db.add(LoginSession(digest=session_digest(settings, token), expires_at=0, user_id=user_id))
+            db.add(LoginSession(digest=session_digest(settings, token), expires_at=now + COOKIE_SECONDS, user_id=user_id))
             return token, 0
 
         if attempt is None:
@@ -143,7 +159,7 @@ def session_user(engine: Engine, settings: Settings, token: str | None) -> int |
         return None
     with Session(engine) as db:
         record = db.get(LoginSession, session_digest(settings, token))
-        if record is not None and (record.expires_at == 0 or record.expires_at > int(time.time())):
+        if record is not None and record.expires_at > int(time.time()):
             if record.user_id == 1 or (record.user_id == 2 and settings.partner_enabled):
                 return record.user_id
     return None

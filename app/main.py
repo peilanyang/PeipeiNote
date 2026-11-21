@@ -60,7 +60,8 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # 啟動時建立資料表，關閉時釋放資料庫連線。
         try:
-            initialize_household(engine, settings.configured and settings.partner_enabled)
+            partner_username = settings.partner_username if settings.configured else None
+            initialize_household(engine, partner_username)
             update_note_schema(engine)
             initialize_search(engine)
             yield
@@ -78,7 +79,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     app.include_router(backup_routes(engine, settings, db_path.parent / "uploads"))
 
     def remember_login(response: Response, token: str) -> None:
-        # 進入首頁時續存瀏覽器 Cookie。
+        # Cookie 在登入時設定，與伺服器端憑證使用同一期限。
         response.set_cookie(
             COOKIE, token, max_age=COOKIE_SECONDS, httponly=True, secure=secure_cookie, samesite="lax"
         )
@@ -97,9 +98,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
             return RedirectResponse("/login", status_code=303, headers={"Cache-Control": "no-store"})
         if (kind is None) != (item_id is None):
             raise HTTPException(422, "請同時指定項目層級和編號。")
-        response = render_workspace(request, engine, user_id, kind, item_id, new_note)
-        remember_login(response, token)
-        return response
+        return render_workspace(request, engine, user_id, kind, item_id, new_note)
 
     @app.get("/login")
     def login_page() -> HTMLResponse:
@@ -126,7 +125,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
         ip = request.client.host if request.client else "unknown"
         token, retry_after = authenticate(engine, settings, ip, username, password or "")
         if retry_after:
-            response = page("暫停登入", "<p>此連線暫時鎖定，請稍後再試。</p><a href='/login'>回登入頁</a>", 429)
+            response = page("暫停登入", "<p>暫時無法接受登入，請稍後再試。</p><a href='/login'>回登入頁</a>", 429)
             response.headers["Retry-After"] = str(retry_after)
             return response
         if token is None:

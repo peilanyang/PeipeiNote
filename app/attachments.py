@@ -5,10 +5,14 @@ from pathlib import Path
 from urllib.parse import unquote
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
+from zlib import error as ZlibError
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
+from lxml import etree
 from PIL import Image
+from pypdf import PdfReader
+from pypdf.errors import DependencyError, PyPdfError
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -19,6 +23,7 @@ from app.database import Attachment, Note
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 24_000_000
+MAX_DOCX_PART_BYTES = 8 * 1024 * 1024
 IMAGE_TYPES = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".gif": "GIF", ".webp": "WEBP"}
 MEDIA_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -30,8 +35,51 @@ FILE_ID = re.compile(r"[0-9a-f]{32}\.(?:png|jpe?g|gif|webp|pdf|docx|txt|zip)")
 logger = logging.getLogger(__name__)
 
 
+def valid_docx(archive: ZipFile) -> bool:
+    # 只解壓並解析三個必要 XML 部件，限制大小並禁止載入外部實體。
+    parts = {}
+    for name in ("[Content_Types].xml", "_rels/.rels", "word/document.xml"):
+        info = archive.getinfo(name)
+        if info.file_size > MAX_DOCX_PART_BYTES:
+            return False
+        root = etree.fromstring(
+            archive.read(info), parser=etree.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+        )
+        if root.getroottree().docinfo.doctype:
+            return False
+        parts[name] = root
+
+    # 驗明封裝宣告、入口關聯及正文，接受一般與嚴格版 Word 正文命名空間。
+    types_ns = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+    rels_ns = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    word_namespaces = (
+        "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}",
+        "{http://purl.oclc.org/ooxml/wordprocessingml/main}",
+    )
+    types, rels, document = (parts[name] for name in ("[Content_Types].xml", "_rels/.rels", "word/document.xml"))
+    return (
+        types.tag == types_ns + "Types"
+        and any(
+            node.get("PartName") == "/word/document.xml"
+            and node.get("ContentType") == "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+            for node in types.iterchildren(types_ns + "Override")
+        )
+        and rels.tag == rels_ns + "Relationships"
+        and any(
+            node.get("Target") in ("word/document.xml", "/word/document.xml")
+            and node.get("TargetMode", "Internal") == "Internal"
+            and node.get("Type") in (
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+                "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
+            )
+            for node in rels.iterchildren(rels_ns + "Relationship")
+        )
+        and any(document.tag == ns + "document" and document.find(ns + "body") is not None for ns in word_namespaces)
+    )
+
+
 def valid_payload(data: bytearray, suffix: str) -> bool:
-    # 依允許的副檔名檢查實際格式，ZIP 與 DOCX 不解壓內容。
+    # 依允許的副檔名檢查實際格式，一般 ZIP 只讀中央目錄。
     try:
         if suffix in IMAGE_TYPES:
             with Image.open(io.BytesIO(data), formats=[IMAGE_TYPES[suffix]]) as image:
@@ -44,12 +92,8 @@ def valid_payload(data: bytearray, suffix: str) -> bool:
         if suffix == ".pdf":
             if not re.match(rb"%PDF-(?:1\.[0-7]|2\.0)(?:\r\n|\r|\n)", data):
                 return False
-            tail = data.rstrip()[-4096:]
-            pointer = re.search(rb"(?:^|[\r\n])startxref\s+([0-9]{1,10})\s+%%EOF$", tail)
-            if pointer is None:
-                return False
-            offset = int(pointer[1])
-            return bool(re.match(rb"(?:xref\s|[0-9]+\s+[0-9]+\s+obj\b)", data[offset:offset + 48]))
+            with PdfReader(io.BytesIO(data), strict=True) as pdf:
+                return not pdf.is_encrypted and pdf.root_object.get("/Type") == "/Catalog" and len(pdf.pages) > 0
         if suffix == ".txt":
             decoded = data.decode("utf-8-sig")
             return not any(ord(char) < 32 and char not in "\r\n\t\f" for char in decoded)
@@ -58,8 +102,9 @@ def valid_payload(data: bytearray, suffix: str) -> bool:
         with ZipFile(io.BytesIO(data)) as archive:
             if suffix == ".zip":
                 return True
-            return {"[Content_Types].xml", "_rels/.rels", "word/document.xml"}.issubset(archive.namelist())
-    except (OSError, ValueError, SyntaxError, BadZipFile, Image.DecompressionBombError):
+            return valid_docx(archive)
+    except (OSError, ValueError, SyntaxError, LookupError, RuntimeError, TypeError, BadZipFile,
+            Image.DecompressionBombError, etree.LxmlError, DependencyError, PyPdfError, ZlibError):
         return False
 
 

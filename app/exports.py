@@ -39,15 +39,18 @@ class Entry:
     note: Note | None = None
 
 
-def image_paths(db: Session, notes: list[Note], uploads: Path) -> dict[str, Path]:
-    # 批次取得正文所引用的私有圖檔路徑，離開交易後才開圖。
+def image_paths(db: Session, notes: list[Note], uploads: Path, user_id: int) -> dict[str, Path]:
+    # 以登入者權限批次查詢正文引用的圖片，離開交易後才開圖。
     ids = sorted({
         match[1] for note in notes if note.content_format == "html"
         for match in re.finditer(r'/api/files/([0-9a-f]{32}\.(?:png|jpe?g|gif|webp))', note.content)
     })
+    files = notebook_items(Attachment, user_id).with_only_columns(
+        Attachment.storage_name, maintain_column_froms=True,
+    )
     paths = {}
     for start in range(0, len(ids), 500):
-        names = db.scalars(select(Attachment.storage_name).where(
+        names = db.scalars(files.where(
             Attachment.storage_name.in_(ids[start:start + 500]), Attachment.media_type.startswith("image/")
         ))
         paths.update((name, uploads / name) for name in names)
@@ -288,7 +291,7 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
             note = db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) if 0 < note_id < 2**63 else None
             if note is None:
                 raise HTTPException(404, "找不到這則筆記。")
-            paths = image_paths(db, [note], uploads)
+            paths = image_paths(db, [note], uploads, user_id)
         writer = WordWriter(paths)
         writer.document.add_heading(xml_text(note.title), 0)
         writer.note(note)
@@ -304,7 +307,7 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
             if notebook is None:
                 raise HTTPException(404, "找不到這本筆記本。")
             outline = notebook_outline(db, notebook_id)
-            paths = image_paths(db, [entry.note for entry in outline if entry.note is not None], uploads)
+            paths = image_paths(db, [entry.note for entry in outline if entry.note is not None], uploads, user_id)
         writer = WordWriter(paths)
         writer.document.add_heading(xml_text(notebook.name), 0)
         writer.document.add_heading("目錄", 1)

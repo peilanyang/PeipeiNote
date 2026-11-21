@@ -2,7 +2,7 @@ from pathlib import Path
 from sqlite3 import Connection
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Table, UniqueConstraint, URL, create_engine, event, inspect
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Table, UniqueConstraint, URL, create_engine, event, inspect, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -18,6 +18,7 @@ class User(Base):
     __table_args__ = (CheckConstraint("id IN (1, 2)"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str | None]
 
 
 class Owned:
@@ -143,8 +144,8 @@ def make_engine(path: Path) -> Engine:
     return engine
 
 
-def initialize_household(engine: Engine, partner_enabled: bool) -> None:
-    # 帳號使用固定槽位，舊資料全部歸主帳號。
+def initialize_household(engine: Engine, partner_username: str | None = None) -> None:
+    # 保留原有所有權，並把第二帳號槽位固定綁定到原使用者名稱。
     with engine.connect() as connection:
         # SQLite 只有在停用此連線的外鍵檢查時，才允許新增帶預設值的外鍵。
         connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
@@ -153,9 +154,16 @@ def initialize_household(engine: Engine, partner_enabled: bool) -> None:
             with connection.begin():
                 connection.exec_driver_sql("BEGIN IMMEDIATE")
                 Base.metadata.create_all(connection)
-                for user_id in (1, 2) if partner_enabled else (1,):
-                    connection.execute(insert(User).values(id=user_id).on_conflict_do_nothing())
                 schema = inspect(connection)
+                if "username" not in {column["name"] for column in schema.get_columns("users")}:
+                    connection.exec_driver_sql("ALTER TABLE users ADD COLUMN username VARCHAR")
+                    # 已停用且沒有舊名稱可核對的槽位永久保留，由本機管理員處理。
+                    connection.execute(update(User).where(User.id == 2).values(username=partner_username or ""))
+                connection.execute(insert(User).values(id=1).on_conflict_do_nothing())
+                if partner_username:
+                    connection.execute(insert(User).values(id=2, username=partner_username).on_conflict_do_nothing())
+                    if connection.scalar(select(User.username).where(User.id == 2)) != partner_username:
+                        raise RuntimeError("第二帳號的名稱不符原有資料歸屬。請恢復原設定或先由本機管理員處理舊資料。")
                 if "owner_id" not in {column["name"] for column in schema.get_columns("notebooks")}:
                     connection.exec_driver_sql(
                         "ALTER TABLE notebooks ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 1 REFERENCES users(id)"

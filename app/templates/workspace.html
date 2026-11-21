@@ -154,11 +154,11 @@
                 </form>
               {% endfor %}
             </div>
-            {% if tags|length > assigned_tag_ids|length %}
+            {% if available_tags %}
               <form class="inline" method="post" action="/library/notes/{{ selection.id }}/tags">
                 <select name="tag_id" aria-label="選擇標籤" required>
                   <option value="">選擇標籤</option>
-                  {% for tag in tags if tag.id not in assigned_tag_ids %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+                  {% for tag in available_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
                 </select>
                 <button name="action" value="add" type="submit">加入標籤</button>
               </form>

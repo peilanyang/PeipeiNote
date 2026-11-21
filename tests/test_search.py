@@ -10,7 +10,7 @@ def test_index_existing_notes(tmp_path: Path) -> None:
     # 先建立舊版筆記再加入搜尋索引，確認回填可重跑且不重複。
     engine = make_engine(tmp_path / "existing.db")
     try:
-        initialize_household(engine, partner_enabled=False)
+        initialize_household(engine)
         with Session(engine) as db, db.begin():
             db.add(Notebook(id=1, owner_id=1, name="原有筆記本"))
             db.flush()

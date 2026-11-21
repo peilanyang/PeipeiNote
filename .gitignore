@@ -4,6 +4,8 @@
 *.db
 *.db-*
 uploads/
+# 完整備份可能包含兩位使用者的資料。
+*.zip
 .venv/
 __pycache__/
 .pytest_cache/
