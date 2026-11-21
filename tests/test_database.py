@@ -5,20 +5,20 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.database import Base, Note, Notebook, Tag, Topic, TopicList, make_engine, note_tags
+from app.database import Note, Notebook, Tag, Topic, TopicList, initialize_household, make_engine, note_tags
 
 
 def test_database_schema_and_foreign_keys(tmp_path: Path) -> None:
     # 建立四層結構，驗證標籤關聯與 SQLite 對孤兒筆記的攔截。
     engine = make_engine(tmp_path / "test.db")
     try:
-        Base.metadata.create_all(engine)
+        initialize_household(engine, partner_enabled=False)
         assert {
             "notebooks", "notebook_positions", "topic_lists", "topics", "notes", "tags", "note_tags",
-            "templates", "attachments", "login_attempts", "login_sessions",
+            "templates", "attachments", "login_attempts", "login_sessions", "users",
         } == set(inspect(engine).get_table_names())
         with Session(engine) as db, db.begin():
-            notebook = Notebook(name="個人")
+            notebook = Notebook(owner_id=1, name="個人")
             db.add(notebook)
             db.flush()
             section = TopicList(name="資料", notebook_id=notebook.id)
@@ -28,7 +28,7 @@ def test_database_schema_and_foreign_keys(tmp_path: Path) -> None:
             db.add(topic)
             db.flush()
             note = Note(title="摘要", topic_id=topic.id)
-            tag = Tag(name="閱讀")
+            tag = Tag(owner_id=1, name="閱讀")
             db.add_all([note, tag])
             db.flush()
             db.execute(note_tags.insert().values(note_id=note.id, tag_id=tag.id))
@@ -42,7 +42,7 @@ def test_wal_allows_writes_during_a_read_snapshot(tmp_path: Path) -> None:
     # 每條連線等候寫入鎖，讀取交易期間另一條連線仍能提交。
     engine = make_engine(tmp_path / "wal.db")
     try:
-        Base.metadata.create_all(engine)
+        initialize_household(engine, partner_enabled=False)
         with engine.connect() as reader, engine.connect() as writer:
             for connection in (reader, writer):
                 assert connection.exec_driver_sql("PRAGMA journal_mode").scalar_one() == "wal"
@@ -52,7 +52,7 @@ def test_wal_allows_writes_during_a_read_snapshot(tmp_path: Path) -> None:
             reader.exec_driver_sql("BEGIN")
             assert reader.execute(Notebook.__table__.select()).all() == []
             with writer.begin():
-                writer.execute(Notebook.__table__.insert().values(name="寫入成功"))
+                writer.execute(Notebook.__table__.insert().values(name="寫入成功", owner_id=1))
             assert reader.execute(Notebook.__table__.select()).all() == []
             reader.commit()
             assert reader.execute(Notebook.__table__.select()).one().name == "寫入成功"

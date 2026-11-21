@@ -2,7 +2,8 @@ from pathlib import Path
 from sqlite3 import Connection
 from uuid import uuid4
 
-from sqlalchemy import Column, ForeignKey, Table, URL, create_engine, event
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Table, UniqueConstraint, URL, create_engine, event, inspect
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -12,7 +13,19 @@ class Base(DeclarativeBase):
     pass
 
 
-class Notebook(Base):
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (CheckConstraint("id IN (1, 2)"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+
+class Owned:
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    is_shared: Mapped[bool] = mapped_column(server_default="0")
+
+
+class Notebook(Owned, Base):
     __tablename__ = "notebooks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -53,11 +66,12 @@ class Note(Base):
     version: Mapped[str] = mapped_column(default=lambda: uuid4().hex, server_default="legacy")
 
 
-class Tag(Base):
+class Tag(Owned, Base):
     __tablename__ = "tags"
+    __table_args__ = (UniqueConstraint("owner_id", "name"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(unique=True)
+    name: Mapped[str]
 
 
 note_tags = Table(
@@ -68,7 +82,7 @@ note_tags = Table(
 )
 
 
-class Template(Base):
+class Template(Owned, Base):
     __tablename__ = "templates"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -85,7 +99,7 @@ class Attachment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     note_id: Mapped[int] = mapped_column(ForeignKey("notes.id"), index=True)
     original_name: Mapped[str]
-    storage_name: Mapped[str] = mapped_column(unique=True)
+    storage_name: Mapped[str]
     media_type: Mapped[str]
     size_bytes: Mapped[int]
 
@@ -103,6 +117,7 @@ class LoginSession(Base):
 
     digest: Mapped[str] = mapped_column(primary_key=True)
     expires_at: Mapped[int] = mapped_column(index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
 def configure_connection(connection: Connection, _record: object) -> None:
@@ -126,3 +141,45 @@ def make_engine(path: Path) -> Engine:
     engine = create_engine(URL.create("sqlite", database=str(path)))
     event.listen(engine, "connect", configure_connection)
     return engine
+
+
+def initialize_household(engine: Engine, partner_enabled: bool) -> None:
+    # 帳號使用固定槽位，舊資料全部歸主帳號。
+    with engine.connect() as connection:
+        # SQLite 只有在停用此連線的外鍵檢查時，才允許新增帶預設值的外鍵。
+        connection.exec_driver_sql("PRAGMA foreign_keys = OFF")
+        connection.commit()
+        try:
+            with connection.begin():
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                Base.metadata.create_all(connection)
+                for user_id in (1, 2) if partner_enabled else (1,):
+                    connection.execute(insert(User).values(id=user_id).on_conflict_do_nothing())
+                schema = inspect(connection)
+                if "owner_id" not in {column["name"] for column in schema.get_columns("notebooks")}:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE notebooks ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 1 REFERENCES users(id)"
+                    )
+                    connection.exec_driver_sql("ALTER TABLE notebooks ADD COLUMN is_shared BOOLEAN NOT NULL DEFAULT 0")
+                if "owner_id" not in {column["name"] for column in schema.get_columns("templates")}:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE templates ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 1 REFERENCES users(id)"
+                    )
+                    connection.exec_driver_sql("ALTER TABLE templates ADD COLUMN is_shared BOOLEAN NOT NULL DEFAULT 0")
+                if "owner_id" not in {column["name"] for column in schema.get_columns("tags")}:
+                    # 保留標籤 ID 與既有連結，名稱改為每帳號各自唯一。
+                    connection.exec_driver_sql("CREATE TEMP TABLE legacy_tags AS SELECT id, name FROM tags")
+                    Tag.__table__.drop(connection)
+                    Tag.__table__.create(connection)
+                    connection.exec_driver_sql(
+                        "INSERT INTO tags (id, name, owner_id) SELECT id, name, 1 FROM legacy_tags"
+                    )
+                    connection.exec_driver_sql("DROP TABLE legacy_tags")
+                if "user_id" not in {column["name"] for column in schema.get_columns("login_sessions")}:
+                    LoginSession.__table__.drop(connection)
+                    LoginSession.__table__.create(connection)
+                if connection.exec_driver_sql("PRAGMA foreign_key_check").first() is not None:
+                    raise RuntimeError("資料庫外鍵檢查失敗，已取消雙帳號遷移。")
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys = ON")
+            connection.commit()

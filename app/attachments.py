@@ -9,12 +9,12 @@ from zipfile import BadZipFile, ZipFile
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image
-from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.auth import COOKIE, Settings, require_same_origin, session_active
+from app.access import notebook_items
+from app.auth import Settings, require_user
 from app.database import Attachment, Note
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
@@ -64,7 +64,7 @@ def valid_payload(data: bytearray, suffix: str) -> bool:
 
 
 def store_attachment(
-    engine: Engine, uploads: Path, note_id: int, filename: str, data: bytearray,
+    engine: Engine, uploads: Path, user_id: int, note_id: int, filename: str, data: bytearray,
 ) -> dict[str, str]:
     # 附件檔案使用 UUID，交易失敗時清理已寫入的檔案。
     name = re.split(r"[/\\]", filename)[-1]
@@ -79,7 +79,7 @@ def store_attachment(
     try:
         with Session(engine) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
-            if db.get(Note, note_id) is None:
+            if db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) is None:
                 raise HTTPException(404, "找不到這則筆記。")
             uploads.mkdir(parents=True, exist_ok=True)
             with path.open("xb") as output:
@@ -96,10 +96,10 @@ def store_attachment(
     return {"id": file_id, "name": name, "url": f"/api/files/{file_id}", "media_type": MEDIA_TYPES[suffix]}
 
 
-def lookup_attachment(db: Session, file_id: str) -> Attachment:
+def lookup_attachment(db: Session, file_id: str, user_id: int) -> Attachment:
     # 只接受系統產生的檔案編號，拒絕路徑及其他字串。
     if FILE_ID.fullmatch(file_id):
-        file = db.scalar(select(Attachment).where(Attachment.storage_name == file_id))
+        file = db.scalar(notebook_items(Attachment, user_id).where(Attachment.storage_name == file_id))
         if file is not None:
             return file
     raise HTTPException(404, "找不到這個附件。")
@@ -109,18 +109,19 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
     # 附件端點共用應用程式既有的登入和同源驗證。
     router = APIRouter()
 
-    def require_login(request: Request) -> None:
-        # 私有附件只開放給已登入的管理者。
-        if not session_active(engine, settings, request.cookies.get(COOKIE)):
-            raise HTTPException(401, "請先登入 PeipeiNote。")
-
     @router.post("/api/notes/{note_id}/files", status_code=201)
     async def upload(request: Request, note_id: int) -> dict[str, str]:
         # 驗證後才以串流讀取，超過單檔上限即拒絕。
-        await run_in_threadpool(require_login, request)
-        require_same_origin(request, settings)
+        user_id = await run_in_threadpool(require_user, engine, settings, request, write=True)
         if not 0 < note_id < 2**63:
             raise HTTPException(404, "找不到這則筆記。")
+        # 先查權限再接收資料，真正寫檔前在交易中重查。
+        def check_note() -> None:
+            with Session(engine) as db:
+                if db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) is None:
+                    raise HTTPException(404, "找不到這則筆記。")
+
+        await run_in_threadpool(check_note)
         encoded_name = request.headers.get("x-filename", "")
         if not encoded_name or len(encoded_name) > 3200:
             raise HTTPException(422, "缺少有效檔名。")
@@ -135,14 +136,14 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
             data.extend(chunk)
         if not data:
             raise HTTPException(422, "檔案是空的。")
-        return await run_in_threadpool(store_attachment, engine, uploads, note_id, filename, data)
+        return await run_in_threadpool(store_attachment, engine, uploads, user_id, note_id, filename, data)
 
     @router.get("/api/files/{file_id}")
     def download(request: Request, file_id: str, download: bool = False) -> FileResponse:
         # 圖片可內嵌，其餘格式以附件下載，保留安全快取及內容類型標頭。
-        require_login(request)
+        user_id = require_user(engine, settings, request)
         with Session(engine) as db:
-            file = lookup_attachment(db, file_id)
+            file = lookup_attachment(db, file_id, user_id)
             path = uploads / file.storage_name
             if not path.is_file():
                 raise HTTPException(404, "附件檔案已遺失。")
@@ -156,12 +157,11 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
     @router.post("/api/files/{file_id}/delete")
     def delete_attachment(request: Request, file_id: str) -> RedirectResponse:
         # 內嵌圖片要先從正文移除並儲存，避免留下失效的插圖。
-        require_login(request)
-        require_same_origin(request, settings)
+        user_id = require_user(engine, settings, request, write=True)
         with Session(engine) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
-            file = lookup_attachment(db, file_id)
-            note = db.get(Note, file.note_id)
+            file = lookup_attachment(db, file_id, user_id)
+            note = db.scalar(notebook_items(Note, user_id).where(Note.id == file.note_id))
             note_id = file.note_id
             if note and note.content_format == "html" and f'src="/api/files/{file_id}"' in note.content:
                 raise HTTPException(409, "請先從正文移除這張圖片並儲存筆記。")

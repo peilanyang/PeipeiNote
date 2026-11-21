@@ -12,10 +12,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.attachments import attachment_routes
 from app.auth import (
     COOKIE, COOKIE_SECONDS, ROOT, Settings, authenticate, read_settings,
-    require_same_origin, revoke_session, session_active,
+    require_same_origin, revoke_session, session_user,
 )
 from app.backup import backup_routes
-from app.database import Base, make_engine
+from app.database import initialize_household, make_engine
 from app.exports import export_routes
 from app.library import library_routes
 from app.richtext import update_note_schema
@@ -59,10 +59,10 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # 啟動時建立資料表，關閉時釋放資料庫連線。
-        Base.metadata.create_all(engine)
-        update_note_schema(engine)
-        initialize_search(engine)
         try:
+            initialize_household(engine, settings.configured and settings.partner_enabled)
+            update_note_schema(engine)
+            initialize_search(engine)
             yield
         finally:
             engine.dispose()
@@ -92,11 +92,12 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     ) -> Response:
         # 首頁只顯示給已通過登入驗證的使用者。
         token = request.cookies.get(COOKIE)
-        if not token or not session_active(engine, settings, token):
+        user_id = session_user(engine, settings, token)
+        if not token or user_id is None:
             return RedirectResponse("/login", status_code=303, headers={"Cache-Control": "no-store"})
         if (kind is None) != (item_id is None):
             raise HTTPException(422, "請同時指定項目層級和編號。")
-        response = render_workspace(request, engine, kind, item_id, new_note)
+        response = render_workspace(request, engine, user_id, kind, item_id, new_note)
         remember_login(response, token)
         return response
 

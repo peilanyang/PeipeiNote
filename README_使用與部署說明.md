@@ -1,6 +1,6 @@
 # PeipeiNote 使用與部署說明
 
-PeipeiNote 是單一帳號的私人筆記系統。結構是「筆記本 → 主題清單 → 主題 → 筆記」。以下說明如何在 Windows 開啟、如何備份並還原，以及如何在自己的 Linux 主機透過 HTTPS 使用。
+PeipeiNote 是最多兩組白名單帳號的家庭筆記系統。每人有自己的私人筆記本，也可以選擇分享特定筆記本。結構是「筆記本 → 主題清單 → 主題 → 筆記」。以下說明如何在 Windows 開啟、如何備份並還原，以及如何在自己的 Linux 主機透過 HTTPS 使用。
 
 ## 在 Windows 開啟
 
@@ -28,17 +28,39 @@ PeipeiNote 是單一帳號的私人筆記系統。結構是「筆記本 → 主�
 - 若顯示 `address already in use`，通常已有服務在使用 8000。先確認是否有另一個 PeipeiNote 啟動視窗，按 **Ctrl+C** 結束舊程序，再執行 `start.bat`。若舊服務在背景執行，先辨識是 PeipeiNote 再停止。
 - 設定自訂網址時，請讓瀏覽器網址的協定、網域和連接埠與 `.env` 內的 `APP_ORIGIN` 一致。
 
+## 設定第二組帳號與驗收家庭共用
+
+1. 先備份資料並儲存正在編輯的筆記。在伺服器視窗按 **Ctrl+C**。在專案資料夾的 PowerShell 執行下列指令。
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m app.setup_account --partner
+   ```
+
+2. 輸入不同的帳號名稱、至少 12 字元且與主帳號不同的密碼。指令會把第二組帳號及其 Argon2id 雜湊加到既有的 `.env`。Linux 對應指令是 `.venv/bin/python -m app.setup_account --partner`。手動管理設定時，可使用 `PARTNER_USERNAME` 與 `PARTNER_PASSWORD_HASH`。
+3. 重新執行 `start.bat`。第一次啟動新版會自動遷移舊資料，由第一組帳號私人持有。兩人分別用一般與無痕視窗登入，或使用不同的瀏覽器設定檔。
+4. 用其中一位帳號建立測試筆記本及筆記，附上一張圖片或 PDF。另一位重新整理工作區，應看不到這本筆記本。直接開啟該筆記或附件網址應顯示 404。
+5. 回到擁有者的筆記本頁面，點「設為共用」。另一位重新整理後應看到帶有 👥 圖示的筆記本，並能新增筆記、編輯、開啟附件以及匯出 Word。在兩個視窗開啟同一筆記並同時修改，讓第一個視窗先儲存，第二個視窗再儲存。後者會收到版本衝突提示，草稿會保留。
+6. 擁有者點「設為私人」。另一位重新整理後，選單、筆記、附件與匯出連結都會失去存取權。先前下載到個人裝置的副本仍在。
+
 ## 完整備份與還原
 
 | 項目 | 內容 |
 | --- | --- |
 | `peipeinote.db` | 筆記本、筆記、標籤、範本、附件索引與搜尋索引 |
 | `uploads/` | 圖片與上傳附件的原始檔 |
-| `.env` | 管理者帳號、密碼雜湊、登入金鑰和站台網址 |
+| `.env` | 白名單帳號、密碼雜湊、登入金鑰和站台網址 |
 
 Word 匯出適合保存可讀文件。要把系統還原到原本可以登入、搜尋及下載附件的狀態，請備份上表三項。
 
 ### 備份
+
+家庭資料包含兩位使用者的私人內容，完整備份由本機操作員執行。在專案資料夾執行下列 PowerShell 指令，可取得含 SQLite 快照及附件的 ZIP。另請在受保護的位置保存同一批 `.env`。
+
+```powershell
+.\.venv\Scripts\python.exe -m app.backup "$env:USERPROFILE\PeipeiNote-backup.zip"
+```
+
+指令需要新的目的檔名。Linux 可用 `.venv/bin/python -m app.backup /安全目錄/PeipeiNote-backup.zip`。家庭帳號曾啟用的資料庫會停用網頁完整備份。你也可以依下列步驟停機備份。
 
 1. 儲存所有正在編輯的筆記，停止 PeipeiNote。在 Windows 的啟動視窗按 **Ctrl+C**；若以系統服務執行，則停止該服務。
 2. 在專案外建立一個有日期的備份資料夾，將三項一起複製過去。同一時間若仍有 `peipeinote.db-wal`、`peipeinote.db-shm` 或 `peipeinote.db-journal`，請保留同一批檔案一起複製。

@@ -1,8 +1,9 @@
+from argparse import ArgumentParser
 from contextlib import closing
 import logging
 from os import link
 from pathlib import Path
-from shutil import copyfile
+from shutil import copyfile, copyfileobj
 import sqlite3
 from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -16,8 +17,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.types import Receive, Scope, Send
 
 from app.attachments import FILE_ID
-from app.auth import COOKIE, Settings, require_same_origin, session_active
-from app.database import Attachment
+from app.auth import ROOT, Settings, require_user
+from app.database import Attachment, User, make_engine
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +43,16 @@ class BackupResponse(FileResponse):
             await run_in_threadpool(self.directory.cleanup)
 
 
-def write_backup(engine: Engine, uploads: Path, directory: Path) -> None:
+def write_backup(engine: Engine, uploads: Path, directory: Path, *, from_web: bool = False) -> None:
     # 用短暫寫入保留鎖固定附件清單。檔案上傳與刪除原本也使用此鎖。
     snapshot = directory / "peipeinote.db"
     uploads.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=".backup-", dir=uploads) as pinned:
         with engine.begin() as guard:
             guard.exec_driver_sql("BEGIN IMMEDIATE")
+            # 第二帳號曾啟用時，即使後來停用也保留硬碟上的私人資料。
+            if from_web and guard.scalar(select(User.id).where(User.id == 2)) is not None:
+                raise HTTPException(403, "家庭資料的完整備份請使用本機管理指令。")
             names = list(guard.scalars(select(Attachment.storage_name).order_by(Attachment.id)))
             with closing(engine.raw_connection()) as source, closing(sqlite3.connect(snapshot)) as target:
                 source.driver_connection.backup(target)
@@ -80,16 +84,48 @@ def backup_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
     @router.post("/backup")
     def download_backup(request: Request) -> FileResponse:
         # 先驗證請求，再使用私有暫存目錄建立下載。
-        if not session_active(engine, settings, request.cookies.get(COOKIE)):
-            raise HTTPException(401, "請先登入 PeipeiNote。")
-        require_same_origin(request, settings)
+        user_id = require_user(engine, settings, request, write=True)
+        if user_id != 1 or settings.partner_enabled:
+            raise HTTPException(403, "家庭資料的完整備份請使用本機管理指令。")
         directory = TemporaryDirectory(prefix="peipeinote-backup-")
         try:
-            write_backup(engine, uploads, Path(directory.name))
+            write_backup(engine, uploads, Path(directory.name), from_web=True)
             return BackupResponse(directory)
+        except HTTPException:
+            directory.cleanup()
+            raise
         except (OSError, sqlite3.Error, SQLAlchemyError):
             directory.cleanup()
             logger.exception("PeipeiNote 完整備份失敗")
             raise HTTPException(503, "無法完整備份。請檢查可用空間與附件是否齊全。") from None
 
     return router
+
+
+def main() -> None:
+    # 完整備份由能直接存取資料庫的本機操作員執行。
+    parser = ArgumentParser(description="將整個 SQLite 資料庫與附件備份到指定 ZIP。")
+    parser.add_argument("destination", type=Path, help="新的備份 ZIP 檔案路徑")
+    destination = parser.parse_args().destination
+    database = ROOT / "peipeinote.db"
+    if not database.is_file():
+        parser.exit(1, "找不到本機資料庫。\n")
+    engine = make_engine(database)
+    created = False
+    try:
+        with TemporaryDirectory(prefix="peipeinote-backup-") as temporary:
+            write_backup(engine, ROOT / "uploads", Path(temporary))
+            with (Path(temporary) / "backup.zip").open("rb") as source, destination.open("xb") as output:
+                created = True
+                copyfileobj(source, output)
+    except (OSError, sqlite3.Error, SQLAlchemyError):
+        if created:
+            destination.unlink(missing_ok=True)
+        parser.exit(1, "備份失敗。請確認目的地不存在，且資料庫與附件均可讀取。\n")
+    finally:
+        engine.dispose()
+    print(f"備份完成：{destination}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,5 @@
 import hmac
+import json
 import logging
 import secrets
 import time
@@ -33,14 +34,32 @@ class Settings:
     secret: str = field(default="", repr=False)
     origin: str = "http://127.0.0.1:8000"
 
+    partner_username: str = ""
+    partner_password_hash: str = field(default="", repr=False)
+
     @property
-    def configured(self) -> bool:
-        # 缺少帳號、有效的 Argon2id 雜湊或金鑰時，關閉登入。
+    def partner_enabled(self) -> bool:
+        # 伴侶帳號可在初次設定後加入。
+        return bool(self.partner_username)
+
+    @staticmethod
+    def valid_hash(password_hash: str) -> bool:
+        # 接受 Argon2id 雜湊。
         try:
-            params = extract_parameters(self.password_hash)
+            return extract_parameters(password_hash).type == Type.ID
         except (InvalidHashError, ValueError):
             return False
-        return bool(self.username and len(self.secret) >= 32 and params.type == Type.ID)
+
+    @property
+    def configured(self) -> bool:
+        # 任一帳號設定不完整時關閉登入，直到本機修正。
+        primary = bool(self.username and len(self.secret) >= 32 and self.valid_hash(self.password_hash))
+        if not self.partner_username and not self.partner_password_hash:
+            return primary
+        return bool(
+            primary and self.partner_username and self.partner_username != self.username
+            and self.valid_hash(self.partner_password_hash)
+        )
 
 
 def read_settings() -> Settings:
@@ -51,6 +70,8 @@ def read_settings() -> Settings:
         password_hash=values.get("ADMIN_PASSWORD_HASH") or "",
         secret=values.get("SECRET_KEY") or "",
         origin=values.get("APP_ORIGIN") or Settings.origin,
+        partner_username=values.get("PARTNER_USERNAME") or "",
+        partner_password_hash=values.get("PARTNER_PASSWORD_HASH") or "",
     )
 
 
@@ -68,8 +89,10 @@ def require_same_origin(request: Request, settings: Settings) -> None:
 
 
 def session_digest(settings: Settings, token: str) -> str:
-    # 資料庫只存登入憑證的摘要，換金鑰可使舊憑證失效。
-    key = hmac.digest(settings.secret.encode(), settings.password_hash.encode(), "sha256")
+    # 換帳號、密碼或金鑰時，舊的工作階段摘要立即失效。
+    accounts = json.dumps([settings.username, settings.password_hash,
+                           settings.partner_username, settings.partner_password_hash])
+    key = hmac.digest(settings.secret.encode(), accounts.encode(), "sha256")
     return hmac.digest(key, token.encode(), "sha256").hex()
 
 
@@ -87,17 +110,20 @@ def authenticate(
             attempt.failures = 0
             attempt.locked_until = 0
 
+        partner = settings.partner_enabled and hmac.compare_digest(settings.partner_username.encode(), username.encode())
+        user_id = 2 if partner else 1
+        password_hash = settings.partner_password_hash if partner else settings.password_hash
         try:
-            valid_password = len(password) <= 1024 and hasher.verify(settings.password_hash, password)
+            valid_password = len(password) <= 1024 and hasher.verify(password_hash, password)
         except (VerificationError, InvalidHashError):
             valid_password = False
-        valid_user = hmac.compare_digest(settings.username.encode(), username.encode())
+        valid_user = partner or hmac.compare_digest(settings.username.encode(), username.encode())
         if valid_password and valid_user:
             if attempt:
                 db.delete(attempt)
             db.execute(delete(LoginSession).where(LoginSession.expires_at > 0, LoginSession.expires_at <= now))
             token = secrets.token_urlsafe(32)
-            db.add(LoginSession(digest=session_digest(settings, token), expires_at=0))
+            db.add(LoginSession(digest=session_digest(settings, token), expires_at=0, user_id=user_id))
             return token, 0
 
         if attempt is None:
@@ -111,13 +137,26 @@ def authenticate(
         return None, 0
 
 
-def session_active(engine: Engine, settings: Settings, token: str | None) -> bool:
-    # 新登入的到期值為 0，舊憑證仍按原期限驗證。
+def session_user(engine: Engine, settings: Settings, token: str | None) -> int | None:
+    # 查出工作階段綁定的帳號。
     if not token or not settings.configured:
-        return False
+        return None
     with Session(engine) as db:
         record = db.get(LoginSession, session_digest(settings, token))
-        return record is not None and (record.expires_at == 0 or record.expires_at > int(time.time()))
+        if record is not None and (record.expires_at == 0 or record.expires_at > int(time.time())):
+            if record.user_id == 1 or (record.user_id == 2 and settings.partner_enabled):
+                return record.user_id
+    return None
+
+
+def require_user(engine: Engine, settings: Settings, request: Request, *, write: bool = False) -> int:
+    # 將憑證解析為帳號。寫入另外驗證請求來源。
+    user_id = session_user(engine, settings, request.cookies.get(COOKIE))
+    if user_id is None:
+        raise HTTPException(401, "請先登入 PeipeiNote。")
+    if write:
+        require_same_origin(request, settings)
+    return user_id
 
 
 def revoke_session(engine: Engine, settings: Settings, token: str | None) -> None:

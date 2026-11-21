@@ -82,24 +82,25 @@ SEARCH_SELECT = """
     JOIN topics AS t ON n.topic_id = t.id
     JOIN topic_lists AS l ON t.topic_list_id = l.id
     JOIN notebooks AS b ON l.notebook_id = b.id
-    WHERE (:book IS NULL OR b.id = :book)
+    WHERE (b.owner_id = :user_id OR b.is_shared = 1)
+      AND (:book IS NULL OR b.id = :book)
       AND (:tag IS NULL OR EXISTS (
         SELECT 1 FROM note_tags AS nt WHERE nt.note_id = n.id AND nt.tag_id = :tag
       ))
 """
 
 
-def search_rows(db: Session, query: str, book: int | None, tag: int | None, page: int) -> tuple[list[dict], bool]:
+def search_rows(db: Session, query: str, book: int | None, tag: int | None, page: int, user_id: int) -> tuple[list[dict], bool]:
     # 將使用者輸入綁定為參數，長詞走 FTS5，短詞仍可搜尋中文。
     if len(query) >= 3:
-        condition = " AND note_search MATCH :phrase ORDER BY s.rank, n.id DESC "
+        condition = " AND note_search MATCH :phrase ORDER BY n.id DESC "
     elif query:
         condition = " AND (instr(lower(s.title), lower(:query)) > 0 OR instr(lower(s.body), lower(:query)) > 0) ORDER BY n.id DESC "
     else:
         condition = " ORDER BY n.id DESC "
     statement = text(SEARCH_SELECT + condition + "LIMIT :limit OFFSET :offset")
     rows = db.execute(statement, {
-        "book": book, "tag": tag, "query": query,
+        "user_id": user_id, "book": book, "tag": tag, "query": query,
         "phrase": '"' + query.replace('"', '""') + '"',
         "limit": PAGE_SIZE + 1, "offset": (page - 1) * PAGE_SIZE,
     }).mappings().all()

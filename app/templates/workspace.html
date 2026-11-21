@@ -33,7 +33,7 @@
         <ul class="tree">
           {% for book in books %}
             <li><details{% if active.get('notebook') == book.id %} open{% endif %}>
-              <summary><a href="/?kind=notebook&amp;item_id={{ book.id }}"{% if kind == 'notebook' and active.get('notebook') == book.id %} aria-current="page"{% endif %}>{{ book.name }}</a></summary>
+              <summary><a href="/?kind=notebook&amp;item_id={{ book.id }}"{% if kind == 'notebook' and active.get('notebook') == book.id %} aria-current="page"{% endif %}>{{ book.name }}</a>{% if book.is_shared %} <span role="img" aria-label="家庭共用" title="家庭共用">👥</span>{% endif %}</summary>
               <ul class="tree">
                 {% for section in sections_by_book.get(book.id, []) %}
                   <li><details{% if active.get('section') == section.id %} open{% endif %}>
@@ -58,9 +58,11 @@
         <p><a href="/library/templates">範本管理</a></p>
       </div>
       <div class="{% if books %}rule{% endif %}">{{ create_form('notebook', '筆記本') }}</div>
+      {% if web_backup %}
       <form class="rule" method="post" action="/backup">
         <button type="submit">下載完整備份</button>
       </form>
+      {% endif %}
     </nav>
     <section class="panel notes" aria-labelledby="notes-heading">
       <h2 id="notes-heading" class="heading">筆記</h2>
@@ -113,7 +115,14 @@
             <a class="button-link" href="/print/notes/{{ selection.id }}">列印／另存 PDF</a>
           </nav>
         {% elif kind == 'notebook' %}
-          <a class="button-link" href="/export/notebooks/{{ selection.id }}.docx">匯出整本 Word</a>
+          <div class="inline">
+            <a class="button-link" href="/export/notebooks/{{ selection.id }}.docx">匯出整本 Word</a>
+            {% if owns_notebook %}
+              <form method="post" action="/workspace/notebook/{{ selection.id }}/share">
+                <button name="is_shared" value="{{ 'false' if selection.is_shared else 'true' }}" type="submit">{{ '設為私人' if selection.is_shared else '設為共用' }}</button>
+              </form>
+            {% endif %}
+          </div>
         {% endif %}
         {% if child_kind == 'section' %}
           <div class="rule">{{ create_form(child_kind, child_label, selection.id) }}</div>
@@ -137,7 +146,7 @@
           <section class="rule" aria-labelledby="note-tags-heading">
             <h2 id="note-tags-heading">標籤</h2>
             <div class="inline">
-              {% for tag in tags if tag.id in assigned_tag_ids %}
+              {% for tag in assigned_tags %}
                 <form method="post" action="/library/notes/{{ selection.id }}/tags">
                   <a href="/library/search?tag={{ tag.id }}">{{ tag.name }}</a>
                   <input type="hidden" name="tag_id" value="{{ tag.id }}">
@@ -204,6 +213,7 @@
             </div>
           </form>
         {% endif %}
+        {% if kind != 'notebook' or owns_notebook %}
         <div class="rule">
           {% if can_delete %}
             <form class="stack" method="post" action="/workspace/{{ kind }}/{{ selection.id }}/delete">
@@ -214,6 +224,7 @@
             <p class="muted nonempty">此{{ label }}仍有下層資料。移動或清空後即可刪除。</p>
           {% endif %}
         </div>
+        {% endif %}
         </details>
       {% elif quick_create %}
         <h3 class="heading" id="editor-heading">新增筆記</h3>

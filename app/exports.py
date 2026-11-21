@@ -20,7 +20,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.attachments import FILE_ID
-from app.auth import COOKIE, Settings, session_active
+from app.access import notebook_items
+from app.auth import Settings, require_user
 from app.database import Attachment, Note, Notebook, Topic, TopicList
 from app.richtext import clean_html
 from app.workspace import templates
@@ -278,18 +279,13 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
     # 保護所有下載與列印入口，未登入不能讀取內容或附件。
     router = APIRouter()
 
-    def authorize(request: Request) -> None:
-        # 讀取前確認有效登入憑證。
-        if not session_active(engine, settings, request.cookies.get(COOKIE)):
-            raise HTTPException(401, "請先登入 PeipeiNote。")
-
     @router.get("/export/notes/{note_id}.docx")
     def export_note(request: Request, note_id: int) -> Response:
         # 將單篇已儲存的筆記輸出成標準 Word 文件。
-        authorize(request)
+        user_id = require_user(engine, settings, request)
         with Session(engine, expire_on_commit=False) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN")
-            note = db.get(Note, note_id) if 0 < note_id < 2**63 else None
+            note = db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) if 0 < note_id < 2**63 else None
             if note is None:
                 raise HTTPException(404, "找不到這則筆記。")
             paths = image_paths(db, [note], uploads)
@@ -301,10 +297,10 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
     @router.get("/export/notebooks/{notebook_id}.docx")
     def export_notebook(request: Request, notebook_id: int) -> Response:
         # 由同一份資料快照建立整本 Word，以及可點擊的階層目錄。
-        authorize(request)
+        user_id = require_user(engine, settings, request)
         with Session(engine, expire_on_commit=False) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN")
-            notebook = db.get(Notebook, notebook_id) if 0 < notebook_id < 2**63 else None
+            notebook = db.scalar(notebook_items(Notebook, user_id).where(Notebook.id == notebook_id)) if 0 < notebook_id < 2**63 else None
             if notebook is None:
                 raise HTTPException(404, "找不到這本筆記本。")
             outline = notebook_outline(db, notebook_id)
@@ -331,9 +327,9 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
     @router.get("/print/notes/{note_id}")
     def print_note(request: Request, note_id: int) -> Response:
         # 列印頁使用獨立版面，HTML 淨化後才送到瀏覽器。
-        authorize(request)
+        user_id = require_user(engine, settings, request)
         with Session(engine) as db:
-            note = db.get(Note, note_id) if 0 < note_id < 2**63 else None
+            note = db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) if 0 < note_id < 2**63 else None
             if note is None:
                 raise HTTPException(404, "找不到這則筆記。")
             rich = note.content_format == "html"
