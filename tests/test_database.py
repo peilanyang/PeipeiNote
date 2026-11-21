@@ -36,3 +36,25 @@ def test_database_schema_and_foreign_keys(tmp_path: Path) -> None:
             db.add(Note(title="無主題", topic_id=999))
     finally:
         engine.dispose()
+
+
+def test_wal_allows_writes_during_a_read_snapshot(tmp_path: Path) -> None:
+    # 每條連線等候寫入鎖，讀取交易期間另一條連線仍能提交。
+    engine = make_engine(tmp_path / "wal.db")
+    try:
+        Base.metadata.create_all(engine)
+        with engine.connect() as reader, engine.connect() as writer:
+            for connection in (reader, writer):
+                assert connection.exec_driver_sql("PRAGMA journal_mode").scalar_one() == "wal"
+                assert connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one() == 15_000
+                assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+                connection.commit()
+            reader.exec_driver_sql("BEGIN")
+            assert reader.execute(Notebook.__table__.select()).all() == []
+            with writer.begin():
+                writer.execute(Notebook.__table__.insert().values(name="寫入成功"))
+            assert reader.execute(Notebook.__table__.select()).all() == []
+            reader.commit()
+            assert reader.execute(Notebook.__table__.select()).one().name == "寫入成功"
+    finally:
+        engine.dispose()

@@ -14,6 +14,7 @@ from app.auth import (
     COOKIE, COOKIE_SECONDS, ROOT, Settings, authenticate, read_settings,
     require_same_origin, revoke_session, session_active,
 )
+from app.backup import backup_routes
 from app.database import Base, make_engine
 from app.exports import export_routes
 from app.library import library_routes
@@ -74,6 +75,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     app.include_router(library_routes(engine, settings))
     app.include_router(export_routes(engine, settings, db_path.parent / 'uploads'))
     app.include_router(attachment_routes(engine, settings, db_path.parent / 'uploads'))
+    app.include_router(backup_routes(engine, settings, db_path.parent / "uploads"))
 
     def remember_login(response: Response, token: str) -> None:
         # 進入首頁時續存瀏覽器 Cookie。

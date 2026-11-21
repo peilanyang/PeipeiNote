@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Form, HTTPException, Path, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import column, func, select, table
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ MAX_ID = 2**63 - 1
 NAME_LIMIT = 200
 CONTENT_LIMIT = 100_000
 templates = Jinja2Templates(directory=str(ROOT / "app" / "templates"))
+search_text = table("note_search", column("rowid"), column("body"))
 
 
 class Kind(str, Enum):
@@ -109,7 +111,11 @@ def render_workspace(
             if ancestor_kind is not None:
                 ancestor = items[ancestor_kind][getattr(ancestor, level.parent_key)]
         topic_id = active.get("topic")
-        notes = list(db.scalars(select(Note).where(Note.topic_id == topic_id).order_by(Note.id))) if topic_id else []
+        notes = db.execute(
+            select(Note.id, Note.title, func.substr(search_text.c.body, 1, 100).label("preview"))
+            .outerjoin(search_text, search_text.c.rowid == Note.id)
+            .where(Note.topic_id == topic_id).order_by(Note.id)
+        ).all() if topic_id else []
         parent = LEVELS[kind].parent if kind is not None else None
         destinations = [
             (row.id, title_path(row, parent, items))
@@ -287,18 +293,32 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
         name: Annotated[str, Form()] = "",
         content: Annotated[str, Form()] = "",
         content_format: Annotated[NoteFormat, Form()] = "plain",
+        version: Annotated[str | None, Form(max_length=32)] = None,
         target_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         direction: Annotated[int, Form(ge=-1, le=1)] = 0,
         confirmed: Annotated[bool, Form()] = False,
-    ) -> RedirectResponse:
+    ) -> Response:
         # 將讀取、父層驗證和修改放在同一筆 SQLite 交易中。
         authorized(request)
         level = LEVELS[kind]
         next_kind, next_id = kind, item_id
+        saved_version = None
         with Session(engine) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             item = get_item(db, kind, item_id)
             if action == Action.save:
+                if isinstance(item, Note):
+                    if version is None:
+                        raise HTTPException(422, "缺少筆記版本。請重新開啟筆記。")
+                    if item.version != version:
+                        if request.headers.get("accept") == "application/json":
+                            raise HTTPException(409, "其他分頁已儲存新版。你的草稿仍在此分頁。")
+                        return templates.TemplateResponse(
+                            request=request, name="note_conflict.html", status_code=409,
+                            context={"note_url": item_url(kind, item_id), "title": name, "draft": content},
+                            headers={"Cache-Control": "no-store"},
+                        )
+                    item.version = saved_version = uuid4().hex
                 save_fields(item, name, content, content_format)
             elif action == Action.move:
                 if level.parent is None:
@@ -314,6 +334,8 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
                 next_kind = level.parent
                 next_id = getattr(item, level.parent_key) if next_kind else None
                 remove_item(db, kind, item)
+        if saved_version and request.headers.get("accept") == "application/json":
+            return JSONResponse({"version": saved_version}, headers={"Cache-Control": "no-store"})
         return RedirectResponse(item_url(next_kind, next_id), status_code=303)
 
     return router

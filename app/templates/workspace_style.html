@@ -107,6 +107,9 @@
     .rich-toolbar button:not(:hover), .rich-toolbar select:not(:hover) { background-color: transparent; }
     .rich-toolbar select, .rich-toolbar button { padding: .33rem .5rem; font-size: .87rem; }
     .editor-actions { width: 100%; }
+    .editor-heading-row { display: flex; align-items: start; justify-content: space-between; gap: .7rem; }
+    .note-save-feedback { flex: 0 1 18rem; text-align: right; color: var(--muted); font-size: .87rem; }
+    #note-save-latest { display: block; color: var(--green); text-decoration: underline; }
     @media (min-width: 900px) {
       body { height: 100dvh; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); }
       .workspace { min-height: 0; }

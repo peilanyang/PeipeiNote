@@ -1,12 +1,19 @@
 from collections.abc import Iterator
+from contextlib import closing
+from io import BytesIO
 from pathlib import Path
+import re
 import secrets
+import sqlite3
 from types import SimpleNamespace
+from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import auth
+from app.exports import WordWriter
+from app.database import Note
 from app.main import create_app
 
 ORIGIN = "https://peipeinote.test"
@@ -104,11 +111,168 @@ def test_private_paths_are_not_exposed(client: TestClient, method: str, path: st
     # 確認公開註冊、機密設定、上傳路徑及 API 文件均未開放。
     assert client.request(method, path).status_code == 404
 
+def note_version(html: str) -> str:
+    # 像瀏覽器一樣使用頁面載入時拿到的筆記版本。
+    match = re.search(r'name="version" value="([^"]+)"', html)
+    assert match is not None
+    return match[1]
+
+
+def open_test_note(client: TestClient, credentials: dict[str, str]) -> str:
+    # 登入並透過正式工作區建立測試筆記。
+    submit(client, "/login", **credentials)
+    return submit(client, "/workspace/note", name="原標題", use_inbox=1)
+
+
 def submit(client: TestClient, path: str, **fields: str | int) -> str:
     # 送出同源表單並傳回成功後的工作區網址。
+    if path.startswith("/workspace/note/") and path.endswith("/save") and "version" not in fields:
+        note_id = path.split("/")[3]
+        fields["version"] = note_version(client.get(f"/?kind=note&item_id={note_id}").text)
     response = client.post(path, data=fields, headers={"Origin": ORIGIN}, follow_redirects=False)
     assert response.status_code == 303, response.text
     return response.headers["location"]
+
+
+def test_two_tabs_keep_the_later_draft_on_version_conflict(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 兩個分頁以同一版本開始編輯，舊版本不得覆蓋已成功儲存的內容。
+    url = open_test_note(client, credentials)
+    tab_a = note_version(client.get(url).text)
+    tab_b = note_version(client.get(url).text)
+    assert tab_a == tab_b
+    path = "/workspace/note/1/save"
+    headers = {"Origin": ORIGIN, "Accept": "application/json"}
+    fields = {"name": "分頁甲", "content": "<p>甲先儲存</p>", "content_format": "html", "version": tab_a}
+    first = client.post(path, files={key: (None, value) for key, value in fields.items()}, headers=headers)
+    assert first.status_code == 200
+    new_version = first.json()["version"]
+    assert new_version != tab_a and note_version(client.get(url).text) == new_version
+
+    draft = {"name": "分頁乙", "content": "<p>乙的草稿</p>", "content_format": "html", "version": tab_b}
+    assert client.post(path, data=draft, headers={**headers, "Origin": "https://elsewhere.test"}).status_code == 403
+    stale = client.post(path, data=draft, headers=headers)
+    assert stale.status_code == 409 and "草稿" in stale.json()["detail"]
+    fallback = client.post(path, data=draft, headers={"Origin": ORIGIN})
+    assert fallback.status_code == 409 and "&lt;p&gt;乙的草稿&lt;/p&gt;" in fallback.text
+    assert client.post(path, data={"name": "未提供版本"}, headers=headers).status_code == 422
+    stored = client.get(url).text
+    assert "甲先儲存" in stored and "乙的草稿" not in stored
+    assert note_version(stored) == new_version
+
+    second = client.post(path, data={**fields, "content": "甲繼續編輯", "version": new_version}, headers=headers)
+    assert second.status_code == 200
+    assert second.json()["version"] != new_version
+    assert "甲繼續編輯" in client.get(url).text
+
+
+def test_list_only_loads_a_100_character_summary_and_opens_full_note(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 中欄只顯示 100 個可見字元，選取筆記後右欄仍可讀完整正文。
+    url = open_test_note(client, credentials)
+    visible = "字" * 99 + "&"
+    tail = "這段只應出現在右欄"
+    submit(client, "/workspace/note/1/save", name="原標題", content_format="html",
+           content=f"<p><strong>{'字' * 99}&amp;</strong>{tail}</p>")
+    topic = client.get("/?kind=topic&item_id=1")
+    assert topic.status_code == 200
+    assert f'<span class="note-preview">{visible[:-1]}&amp;</span>' in topic.text
+    assert tail not in topic.text
+    assert tail in client.get(url).text
+
+
+def test_backup_requires_login_and_same_origin(client: TestClient, credentials: dict[str, str]) -> None:
+    # 備份 ZIP 不可透過未登入、跨站、缺來源或 GET 的請求下載。
+    assert client.post("/backup", headers={"Origin": ORIGIN}).status_code == 401
+    submit(client, "/login", **credentials)
+    assert 'action="/backup"' in client.get("/").text
+    assert client.get("/backup").status_code == 405
+    assert client.post("/backup").status_code == 403
+    assert client.post("/backup", headers={"Origin": "https://elsewhere.test"}).status_code == 403
+    assert client.post("/backup", headers={"Origin": "null", "Referer": f"{ORIGIN}/"}).status_code == 403
+
+
+def test_backup_contains_a_consistent_snapshot_without_secrets(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 壓縮前讓另一請求移除附件，備份仍包含快照中對應的檔案。
+    open_test_note(client, credentials)
+    submit(client, "/workspace/note/1/save", name="有備份", content="重要筆記")
+    origin = {"Origin": ORIGIN}
+    uploaded = client.post("/api/notes/1/files", content="附件本文".encode(),
+                           headers={**origin, "X-Filename": "document.txt"})
+    assert uploaded.status_code == 201
+    file_id = uploaded.json()["id"]
+    (tmp_path / ".env").write_text("private marker", encoding="utf-8")
+    uploads = tmp_path / "uploads"
+    (uploads / ".env").write_text("private marker", encoding="utf-8")
+    write = ZipFile.write
+
+    def delete_before_archive_write(
+        archive: ZipFile, filename: Path, arcname: str, *args: int, **kwargs: int,
+    ) -> None:
+        # 在寫入第一個 ZIP 項目時刪除來源附件，確認交易已釋放。
+        if arcname == "peipeinote.db":
+            deleted = client.post(f"/api/files/{file_id}/delete", headers=origin, follow_redirects=False)
+            assert deleted.status_code == 303
+            assert not (uploads / file_id).exists()
+        write(archive, filename, arcname, *args, **kwargs)
+
+    monkeypatch.setattr(ZipFile, "write", delete_before_archive_write)
+    response = client.post("/backup", headers=origin)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["content-type"] == "application/zip"
+    assert ".zip" in response.headers["content-disposition"]
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert set(archive.namelist()) == {"peipeinote.db", "uploads/", f"uploads/{file_id}"}
+        assert archive.read(f"uploads/{file_id}").decode() == "附件本文"
+        restored = tmp_path / "restored.db"
+        restored.write_bytes(archive.read("peipeinote.db"))
+    with closing(sqlite3.connect(restored)) as database:
+        assert database.execute("PRAGMA quick_check").fetchone() == ("ok",)
+        assert database.execute("SELECT title, content FROM notes").fetchone() == ("有備份", "重要筆記")
+        assert database.execute("SELECT storage_name FROM attachments").fetchone() == (file_id,)
+        assert database.execute("SELECT title FROM note_search WHERE note_search MATCH ?", ("重要筆",)).fetchone() == ("有備份",)
+    assert not list(uploads.glob(".backup-*"))
+
+
+def test_backup_reports_missing_files_and_cleans_up(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path,
+) -> None:
+    # 缺少快照所需的檔案時回報失敗，避免下載看似完整的備份。
+    open_test_note(client, credentials)
+    origin = {"Origin": ORIGIN}
+    uploaded = client.post("/api/notes/1/files", content=b"contents",
+                           headers={**origin, "X-Filename": "file.txt"})
+    assert uploaded.status_code == 201
+    uploads = tmp_path / "uploads"
+    (uploads / uploaded.json()["id"]).unlink()
+    assert client.post("/backup", headers=origin).status_code == 503
+    assert not list(uploads.glob(".backup-*"))
+
+
+def test_notebook_export_releases_its_read_transaction_before_rendering(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Word 產生時另一連線可以提交並完整回收 WAL，證實匯出快照已釋放。
+    open_test_note(client, credentials)
+    original = WordWriter.note
+
+    def render(writer: WordWriter, note: Note, heading_offset: int = 0) -> None:
+        # 匯出讀取交易若仍存在，含新提交資料的 WAL 將無法截斷。
+        with closing(sqlite3.connect(tmp_path / "test.db", timeout=0.2)) as connection:
+            connection.execute("UPDATE notebooks SET name = ?", ("已在匯出時改名",))
+            connection.commit()
+            assert connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (0, 0, 0)
+        original(writer, note, heading_offset)
+
+    monkeypatch.setattr(WordWriter, "note", render)
+    response = client.get("/export/notebooks/1.docx")
+    assert response.status_code == 200
+    assert "已在匯出時改名" in client.get("/").text
 
 
 def test_workspace_creates_edits_moves_and_deletes_all_levels(

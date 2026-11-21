@@ -63,8 +63,12 @@ def update_note_schema(engine: Engine) -> None:
     # 在同一筆交易檢查和新增格式欄，舊記錄維持純文字。
     with engine.begin() as connection:
         connection.exec_driver_sql("BEGIN IMMEDIATE")
-        columns = inspect(connection).get_columns("notes")
-        if not any(column["name"] == "content_format" for column in columns):
+        columns = {column["name"] for column in inspect(connection).get_columns("notes")}
+        if "content_format" not in columns:
             connection.exec_driver_sql(
                 "ALTER TABLE notes ADD COLUMN content_format VARCHAR NOT NULL DEFAULT 'plain'"
+            )
+        if "version" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE notes ADD COLUMN version VARCHAR NOT NULL DEFAULT 'legacy'"
             )

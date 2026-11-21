@@ -44,8 +44,8 @@ def test_schema_update_preserves_existing_note(tmp_path: Path) -> None:
         update_note_schema(engine)
         update_note_schema(engine)
         with engine.connect() as conn:
-            assert conn.execute(text("SELECT content, content_format FROM notes")).one() == (
-                "<b>原本文字</b>\n第二行", "plain",
+            assert conn.execute(text("SELECT content, content_format, version FROM notes")).one() == (
+                "<b>原本文字</b>\n第二行", "plain", "legacy",
             )
     finally:
         engine.dispose()

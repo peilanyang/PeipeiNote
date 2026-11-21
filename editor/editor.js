@@ -3,6 +3,7 @@ import Image from '@tiptap/extension-image';
 import StarterKit from '@tiptap/starter-kit';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { TableKit } from '@tiptap/extension-table';
+import { setupNoteSaving } from './note-save.js';
 
 const PrivateImage = Image.extend({
   parseHTML() {
@@ -133,8 +134,8 @@ if (source && editorHost && toolbar && format) {
           errors.push(file.name + '：' + error.message);
         }
       }
-      status.textContent = errors.length ? errors.join('　') + (inserted ? '　請儲存已插入的圖片。' : '')
-        : inserted ? '已插入圖片。請按「儲存筆記」。' : '附件已上傳。';
+      status.textContent = errors.length ? errors.join('　') + (inserted ? '　其餘圖片已插入。' : '')
+        : inserted ? '已插入圖片。請確認右上角的儲存狀態。' : '附件已上傳。';
     } finally {
       uploading = false;
       choose.disabled = false;
@@ -216,6 +217,7 @@ if (source && editorHost && toolbar && format) {
     source.value = editor.getHTML();
     format.value = 'html';
   });
+  setupNoteSaving(editor, source.form);
   source.hidden = true;
   editorHost.hidden = false;
   toolbar.hidden = false;

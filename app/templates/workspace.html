@@ -58,6 +58,9 @@
         <p><a href="/library/templates">範本管理</a></p>
       </div>
       <div class="{% if books %}rule{% endif %}">{{ create_form('notebook', '筆記本') }}</div>
+      <form class="rule" method="post" action="/backup">
+        <button type="submit">下載完整備份</button>
+      </form>
     </nav>
     <section class="panel notes" aria-labelledby="notes-heading">
       <h2 id="notes-heading" class="heading">筆記</h2>
@@ -67,8 +70,7 @@
           {% for note in notes %}
             <li><a href="/?kind=note&amp;item_id={{ note.id }}"{% if active.get('note') == note.id %} aria-current="page"{% endif %}>
               <span class="note-list-title">{{ note.title }}</span>
-              {% set preview = note.content|striptags if note.content_format == 'html' else note.content %}
-              <span class="note-preview">{{ preview or '尚未輸入內容' }}</span>
+              <span class="note-preview">{{ note.preview or '尚未輸入內容' }}</span>
             </a></li>
           {% else %}<li class="muted">這個主題還沒有筆記。</li>{% endfor %}
         </ul>
@@ -95,7 +97,16 @@
     <section class="panel editor" aria-labelledby="editor-heading">
       {% if selection %}
         <p class="crumb">{{ label }}</p>
-        <h3 id="editor-heading">{{ selection.title if kind == 'note' else selection.name }}</h3>
+        <div class="editor-heading-row">
+          <h3 id="editor-heading">{{ selection.title if kind == 'note' else selection.name }}</h3>
+          {% if kind == 'note' %}
+            <div class="note-save-feedback">
+              <span id="note-save-status" role="status">已儲存</span>
+              <a id="note-save-latest" href="/?kind=note&amp;item_id={{ selection.id }}"
+                 target="_blank" rel="noopener" hidden>在新分頁開啟最新版</a>
+            </div>
+          {% endif %}
+        </div>
         {% if kind == 'note' %}
           <nav class="inline" aria-label="筆記匯出">
             <a class="button-link" href="/export/notes/{{ selection.id }}.docx">匯出 Word</a>
@@ -116,6 +127,7 @@
             <input name="name" maxlength="200" value="{{ selection.title if kind == 'note' else selection.name }}" required>
           </label>
           {% if kind == 'note' %}
+            <input type="hidden" name="version" value="{{ selection.version }}">
             {% set editor_upload_url = '/api/notes/' ~ selection.id ~ '/files' %}
             {% include "note_editor.html" %}
           {% endif %}

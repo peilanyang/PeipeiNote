@@ -38,6 +38,21 @@ class Entry:
     note: Note | None = None
 
 
+def image_paths(db: Session, notes: list[Note], uploads: Path) -> dict[str, Path]:
+    # 批次取得正文所引用的私有圖檔路徑，離開交易後才開圖。
+    ids = sorted({
+        match[1] for note in notes if note.content_format == "html"
+        for match in re.finditer(r'/api/files/([0-9a-f]{32}\.(?:png|jpe?g|gif|webp))', note.content)
+    })
+    paths = {}
+    for start in range(0, len(ids), 500):
+        names = db.scalars(select(Attachment.storage_name).where(
+            Attachment.storage_name.in_(ids[start:start + 500]), Attachment.media_type.startswith("image/")
+        ))
+        paths.update((name, uploads / name) for name in names)
+    return paths
+
+
 def xml_text(value: str) -> str:
     # Word XML 不接受的控制字元不寫入文件。
     return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]", "", value)
@@ -73,9 +88,9 @@ def positive_int(value: str | None, default: int = 1, maximum: int = 64) -> int:
 
 
 class WordWriter:
-    def __init__(self, db: Session, uploads: Path) -> None:
-        # 只從登入後對應的資料庫與私有附件目錄取用內容。
-        self.db, self.uploads = db, uploads
+    def __init__(self, paths: dict[str, Path]) -> None:
+        # 只使用快照中已確認的私有圖片路徑。
+        self.paths = paths
         self.document = Document()
         styles = self.document.styles
         for name in ("Normal", "Title", *(f"Heading {n}" for n in range(1, 7))):
@@ -95,10 +110,10 @@ class WordWriter:
         file_id = src.removeprefix("/api/files/")
         alt = element.get("alt") or "圖片"
         if src.startswith("/api/files/") and FILE_ID.fullmatch(file_id):
-            attachment = self.db.scalar(select(Attachment).where(Attachment.storage_name == file_id))
-            if attachment and attachment.media_type.startswith("image/"):
+            path = self.paths.get(file_id)
+            if path is not None:
                 try:
-                    with Image.open(self.uploads / file_id) as picture:
+                    with Image.open(path) as picture:
                         width, height = picture.size
                         requested = positive_int(element.get("width"), width, 24000)
                         display_width = min(requested / 96, width_limit, 7.8 * width / height)
@@ -272,43 +287,46 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
     def export_note(request: Request, note_id: int) -> Response:
         # 將單篇已儲存的筆記輸出成標準 Word 文件。
         authorize(request)
-        with Session(engine) as db:
+        with Session(engine, expire_on_commit=False) as db, db.begin():
+            db.connection().exec_driver_sql("BEGIN")
             note = db.get(Note, note_id) if 0 < note_id < 2**63 else None
             if note is None:
                 raise HTTPException(404, "找不到這則筆記。")
-            writer = WordWriter(db, uploads)
-            writer.document.add_heading(xml_text(note.title), 0)
-            writer.note(note)
-            return word_response(writer, note.title)
+            paths = image_paths(db, [note], uploads)
+        writer = WordWriter(paths)
+        writer.document.add_heading(xml_text(note.title), 0)
+        writer.note(note)
+        return word_response(writer, note.title)
 
     @router.get("/export/notebooks/{notebook_id}.docx")
     def export_notebook(request: Request, notebook_id: int) -> Response:
         # 由同一份資料快照建立整本 Word，以及可點擊的階層目錄。
         authorize(request)
-        with Session(engine) as db, db.begin():
+        with Session(engine, expire_on_commit=False) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN")
             notebook = db.get(Notebook, notebook_id) if 0 < notebook_id < 2**63 else None
             if notebook is None:
                 raise HTTPException(404, "找不到這本筆記本。")
             outline = notebook_outline(db, notebook_id)
-            writer = WordWriter(db, uploads)
-            writer.document.add_heading(xml_text(notebook.name), 0)
-            writer.document.add_heading("目錄", 1)
-            for number, entry in enumerate(outline, 1):
-                row = writer.document.add_paragraph(xml_text(entry.title))
-                row.paragraph_format.left_indent = Inches(.23 * (entry.level - 1))
-                row.paragraph_format.space_after = Pt(3)
-                wrap_link(row, 0, f"outline_{number}", internal=True)
-            if outline:
-                writer.document.add_page_break()
-            else:
-                writer.document.add_paragraph("這本筆記本目前沒有內容。")
-            for number, entry in enumerate(outline, 1):
-                heading = writer.document.add_heading(xml_text(entry.title), entry.level)
-                add_bookmark(heading, number)
-                if entry.note:
-                    writer.note(entry.note, heading_offset=3)
-            return word_response(writer, notebook.name)
+            paths = image_paths(db, [entry.note for entry in outline if entry.note is not None], uploads)
+        writer = WordWriter(paths)
+        writer.document.add_heading(xml_text(notebook.name), 0)
+        writer.document.add_heading("目錄", 1)
+        for number, entry in enumerate(outline, 1):
+            row = writer.document.add_paragraph(xml_text(entry.title))
+            row.paragraph_format.left_indent = Inches(.23 * (entry.level - 1))
+            row.paragraph_format.space_after = Pt(3)
+            wrap_link(row, 0, f"outline_{number}", internal=True)
+        if outline:
+            writer.document.add_page_break()
+        else:
+            writer.document.add_paragraph("這本筆記本目前沒有內容。")
+        for number, entry in enumerate(outline, 1):
+            heading = writer.document.add_heading(xml_text(entry.title), entry.level)
+            add_bookmark(heading, number)
+            if entry.note:
+                writer.note(entry.note, heading_offset=3)
+        return word_response(writer, notebook.name)
 
     @router.get("/print/notes/{note_id}")
     def print_note(request: Request, note_id: int) -> Response:
