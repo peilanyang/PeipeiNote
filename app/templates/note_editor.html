@@ -1,24 +1,6 @@
-            <label for="note-content">內容</label>
-            <div id="rich-editor" class="rich-editor"{% if editor_upload_url %} data-upload-url="{{ editor_upload_url }}"{% endif %} hidden></div>
+            {% if not editor_placeholder %}<label for="note-content">內容</label>{% endif %}
+            <div id="rich-editor" class="rich-editor"{% if editor_upload_url %} data-upload-url="{{ editor_upload_url }}"{% endif %}{% if editor_placeholder %} data-placeholder="{{ editor_placeholder }}"{% endif %} hidden></div>
             <input id="content-format" type="hidden" name="content_format" value="{{ editor_content_format }}">
-            <textarea id="note-content" name="content" maxlength="100000"{% if editor_content_format == 'html' %} readonly{% endif %}>
+            <textarea id="note-content" name="content" maxlength="100000"{% if editor_placeholder %} aria-label="內容" placeholder="{{ editor_placeholder }}"{% endif %}{% if editor_content_format == 'html' %} readonly{% endif %}>
 {{ editor_content }}</textarea>
-            <div id="rich-toolbar" class="rich-toolbar" role="group" aria-label="文字格式" hidden>
-              <select aria-label="段落樣式">
-                <option value="0">純文字</option>
-                <option value="1">標題 1</option>
-                <option value="2">標題 2</option>
-                <option value="3">標題 3</option>
-              </select>
-              <button type="button" data-command="toggleBold" aria-pressed="false"><strong>粗體</strong></button>
-              <button type="button" data-command="setHorizontalRule">分隔線</button>
-              <button type="button" data-command="link">連結</button>
-              <button type="button" data-command="toggleTaskList" aria-pressed="false">待辦清單</button>
-              <button type="button" data-command="insertTable">插入表格</button>
-              <button type="button" data-table data-command="addRowAfter">加一列</button>
-              <button type="button" data-table data-command="deleteRow">刪除列</button>
-              <button type="button" data-table data-command="addColumnAfter">加一欄</button>
-              <button type="button" data-table data-command="deleteColumn">刪除欄</button>
-              <button type="button" data-table data-command="deleteTable">刪除表格</button>
-            </div>
             <script defer src="/static/editor.bundle.js"></script>

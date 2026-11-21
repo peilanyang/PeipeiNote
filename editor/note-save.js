@@ -5,7 +5,7 @@ export function setupNoteSaving(editor, form) {
   const title = form.elements.namedItem('name');
   const status = document.querySelector('#note-save-status');
   const latest = document.querySelector('#note-save-latest');
-  const heading = document.querySelector('#editor-heading');
+  const listedTitle = document.querySelector('#topic-notes [aria-current="page"] .note-list-title');
   let timer;
   let changed = 0;
   let persisted = 0;
@@ -63,7 +63,7 @@ export function setupNoteSaving(editor, form) {
       const result = await response.json();
       version.value = result.version;
       persisted = revision;
-      heading.textContent = String(fields.get('name')).trim();
+      if (listedTitle) listedTitle.textContent = String(fields.get('name')).trim();
       status.textContent = changed === persisted ? '已儲存' : '尚未儲存';
       if (changed === persisted) window.removeEventListener('beforeunload', warnBeforeLeaving);
     } catch {

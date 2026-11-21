@@ -31,6 +31,7 @@ const toolbar = document.querySelector('#rich-toolbar');
 const format = document.querySelector('#content-format');
 
 if (source && editorHost && toolbar && format) {
+  const placeholder = editorHost.dataset.placeholder;
   // 將舊記事以純文字帶入編輯器，原本的尖括號仍是文字。
   const content = format.value === 'html' ? source.value : {
     type: 'doc',
@@ -59,7 +60,10 @@ if (source && editorHost && toolbar && format) {
         void uploadFiles(files);
         return true;
       },
-      attributes: { id: 'note-rich-content', role: 'textbox', 'aria-label': '內容', 'aria-multiline': 'true' },
+      attributes: {
+        id: 'note-rich-content', role: 'textbox', 'aria-label': '內容', 'aria-multiline': 'true',
+        ...(placeholder ? { 'aria-placeholder': placeholder } : {}),
+      },
     },
     extensions: [
       StarterKit.configure({
@@ -156,11 +160,14 @@ if (source && editorHost && toolbar && format) {
   const styles = toolbar.querySelector('select');
   const bold = toolbar.querySelector('[data-command="toggleBold"]');
   const checklist = toolbar.querySelector('[data-command="toggleTaskList"]');
-  const tableButtons = toolbar.querySelectorAll('[data-table]');
+  const tableTools = toolbar.querySelector('[data-table-tools]');
+  const tableButtons = tableTools.querySelectorAll('button');
   function updateToolbar() {
+    if (placeholder) editorHost.toggleAttribute('data-empty', editor.isEmpty);
     styles.value = String([1, 2, 3].find(level => editor.isActive('heading', { level })) || 0);
     bold.setAttribute('aria-pressed', String(editor.isActive('bold')));
     checklist.setAttribute('aria-pressed', String(editor.isActive('taskList')));
+    tableTools.hidden = !editor.isActive('table');
     for (const button of tableButtons) {
       button.disabled = !editor.can()[button.dataset.command]();
     }
@@ -221,5 +228,6 @@ if (source && editorHost && toolbar && format) {
   source.hidden = true;
   editorHost.hidden = false;
   toolbar.hidden = false;
-  document.querySelector('label[for="note-content"]').htmlFor = 'note-rich-content';
+  const label = document.querySelector('label[for="note-content"]');
+  if (label) label.htmlFor = 'note-rich-content';
 }

@@ -338,6 +338,8 @@ def test_workspace_creates_edits_moves_and_deletes_all_levels(
     home = client.get("/").text
     assert 'class="workspace workspace-wide"' in home
     assert 'id="notes-heading"' not in home
+    assert '<h2 class="heading"><a href="/library/tags">標籤管理</a></h2>' in home
+    assert '<h2 class="heading"><a href="/library/templates">範本管理</a></h2>' in home
     header, _, workspace = home.partition("</header>")
     assert 'action="/workspace/notebook"' in header and 'action="/workspace/notebook"' not in workspace
     names = ("第一本", "第二本")
@@ -375,6 +377,8 @@ def test_workspace_creates_edits_moves_and_deletes_all_levels(
     submit(client, "/workspace/note/1/save", name=title, content=body)
     editor = client.get(note).text
     assert 'id="notes-heading"' in editor
+    assert editor.index('id="rich-toolbar"') < editor.index('class="note-title"') < editor.index('id="rich-editor"')
+    assert 'aria-label="記事標題"' in editor and 'aria-label="記事位置"' in editor
     assert "O&#39;Reilly &amp; 研究記事" in editor
     assert "\n測試 &lt;標記&gt; 與引號\n第二行" in editor
     assert 'action="/workspace/note/1/save"' in editor

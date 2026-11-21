@@ -49,12 +49,14 @@
           {% endfor %}
         </ul>
       {% endif %}
-      <div class="rule">
+      <div class="rule management-links">
         <h2 class="heading"><a href="/library/tags">標籤管理</a></h2>
+        {% if tags %}
         <ul class="tree">
           {% for tag in tags %}<li><a class="leaf" href="/library/search?tag={{ tag.id }}">{{ tag.name }}</a></li>{% endfor %}
         </ul>
-        <p><a href="/library/templates">範本管理</a></p>
+        {% endif %}
+        <h2 class="heading"><a href="/library/templates">範本管理</a></h2>
       </div>
       {% if web_backup %}
       <form class="rule" method="post" action="/backup">
@@ -105,25 +107,44 @@
       </div>
     </section>
     {% endif %}
-    <section class="panel editor" aria-labelledby="editor-heading">
+    <section class="panel editor{% if kind == 'note' %} note-workspace{% endif %}" {% if kind == 'note' %}aria-label="記事工作區"{% else %}aria-labelledby="editor-heading"{% endif %}>
       {% if selection %}
-        <p class="crumb">{{ label }}</p>
-        <div class="editor-heading-row">
-          <h3 id="editor-heading">{{ selection.title if kind == 'note' else selection.name }}</h3>
-          {% if kind == 'note' %}
-            <div class="note-save-feedback">
-              <span id="note-save-status" role="status">已儲存</span>
-              <a id="note-save-latest" href="/?kind=note&amp;item_id={{ selection.id }}"
-                 target="_blank" rel="noopener" hidden>在新分頁開啟最新版</a>
+      {% if kind == 'note' %}
+        {% set notebook = books|selectattr('id', 'equalto', active.get('notebook'))|first %}
+        {% set editor_upload_url = '/api/notes/' ~ selection.id ~ '/files' %}
+        <form class="note-form note-page" method="post" action="/workspace/note/{{ selection.id }}/save">
+          <div class="note-topline">
+            <nav class="note-location" aria-label="記事位置">
+              <a href="/?kind=notebook&amp;item_id={{ notebook.id }}">{{ notebook.name }}</a>
+              <span aria-hidden="true">›</span>
+              <a href="/?kind=topic&amp;item_id={{ current_topic.id }}">{{ current_topic.name }}</a>
+            </nav>
+            <div class="note-top-actions">
+              <nav class="note-exports" aria-label="記事匯出">
+                <a href="/export/notes/{{ selection.id }}.docx">匯出 Word</a>
+                <a href="/print/notes/{{ selection.id }}">列印／另存 PDF</a>
+              </nav>
+              <div class="note-save-feedback">
+                <span id="note-save-status" role="status">已儲存</span>
+                <a id="note-save-latest" href="/?kind=note&amp;item_id={{ selection.id }}"
+                   target="_blank" rel="noopener" hidden>在新分頁開啟最新版</a>
+              </div>
+              <button class="primary" type="submit">儲存記事</button>
             </div>
-          {% endif %}
-        </div>
-        {% if kind == 'note' %}
-          <nav class="inline" aria-label="記事匯出">
-            <a class="button-link" href="/export/notes/{{ selection.id }}.docx">匯出 Word</a>
-            <a class="button-link" href="/print/notes/{{ selection.id }}">列印／另存 PDF</a>
-          </nav>
-        {% elif kind == 'notebook' %}
+          </div>
+          {% include "note_toolbar.html" %}
+          <div class="note-writing">
+            <input class="note-title" name="name" aria-label="記事標題" placeholder="記事標題"
+                   maxlength="200" value="{{ selection.title }}" required>
+            <input type="hidden" name="version" value="{{ selection.version }}">
+            {% set editor_placeholder = '開始撰寫，或拖曳檔案到這裡' %}
+            {% include "note_editor.html" %}
+          </div>
+        </form>
+      {% else %}
+        <p class="crumb">{{ label }}</p>
+        <h3 id="editor-heading">{{ selection.name }}</h3>
+        {% if kind == 'notebook' %}
           <div class="inline">
             <a class="button-link" href="/export/notebooks/{{ selection.id }}.docx">匯出整本 Word</a>
             {% if owns_notebook %}
@@ -136,21 +157,15 @@
         {% if kind == 'notebook' %}
           <div class="rule create-child">{{ create_form('topic', '主題', selection.id) }}</div>
         {% endif %}
-        {% if kind != 'note' %}
           <details class="rule">
             <summary>管理{{ label }}（改名、移動或刪除）</summary>
-        {% endif %}
-        <form class="stack rule{% if kind == 'note' %} note-form{% endif %}" method="post" action="/workspace/{{ kind }}/{{ selection.id }}/save">
-          <label>{{ '記事標題' if kind == 'note' else label ~ '名稱' }}
-            <input name="name" maxlength="200" value="{{ selection.title if kind == 'note' else selection.name }}" required>
+        <form class="stack rule" method="post" action="/workspace/{{ kind }}/{{ selection.id }}/save">
+          <label>{{ label }}名稱
+            <input name="name" maxlength="200" value="{{ selection.name }}" required>
           </label>
-          {% if kind == 'note' %}
-            <input type="hidden" name="version" value="{{ selection.version }}">
-            {% set editor_upload_url = '/api/notes/' ~ selection.id ~ '/files' %}
-            {% include "note_editor.html" %}
-          {% endif %}
-          <button class="primary" type="submit">{{ '儲存記事' if kind == 'note' else '儲存名稱' }}</button>
+          <button class="primary" type="submit">儲存名稱</button>
         </form>
+      {% endif %}
         {% if kind == 'note' %}
           <section class="rule" aria-labelledby="note-tags-heading">
             <h2 id="note-tags-heading">標籤</h2>
@@ -184,12 +199,7 @@
           </details>
           <section class="rule" aria-labelledby="attachments-heading">
             <h2 id="attachments-heading">附件</h2>
-            <div class="file-picker" id="attachment-picker" hidden>
-              <button type="button" id="choose-attachments">上傳附件</button>
-              <input type="file" id="attachment-input" accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.txt,.zip" multiple hidden>
-              <span class="muted">圖片可直接貼上或拖入內容。拖曳圖片右下角可縮放，單檔限 20 MB。</span>
-            </div>
-            <p id="attachment-status" role="status" aria-live="polite"></p>
+            <p class="muted">圖片可貼上、拖入或縮放；附件單檔上限 20 MB。</p>
             <ul id="attachment-list" class="file-list">
               {% for file in attachments %}
                 <li>
