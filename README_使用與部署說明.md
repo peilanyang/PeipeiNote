@@ -36,7 +36,7 @@ PeipeiNote 是最多兩組白名單帳號的家庭筆記系統。每人有自己
    .\.venv\Scripts\python.exe -m app.setup_account --partner
    ```
 
-2. 輸入不同的帳號名稱、至少 12 字元且與主帳號不同的密碼。指令會把第二組帳號及其 Argon2id 雜湊加到既有的 `.env`。Linux 對應指令是 `.venv/bin/python -m app.setup_account --partner`。手動管理設定時，可使用 `PARTNER_USERNAME` 與 `PARTNER_PASSWORD_HASH`。
+2. 輸入不同的帳號名稱、至少 8 字元且與主帳號不同的密碼。指令會把第二組帳號及其 Argon2id 雜湊加到既有的 `.env`。Linux 對應指令是 `.venv/bin/python -m app.setup_account --partner`。手動管理設定時，可使用 `PARTNER_USERNAME` 與 `PARTNER_PASSWORD_HASH`。
 3. 重新執行 `start.bat`。第一次啟動新版會自動遷移舊資料，由第一組帳號私人持有。兩人分別用一般與無痕視窗登入，或使用不同的瀏覽器設定檔。
 4. 用其中一位帳號建立測試筆記本及筆記，附上一張圖片或 PDF。另一位重新整理工作區，應看不到這本筆記本。直接開啟該筆記或附件網址應顯示 404。
 5. 回到擁有者的筆記本頁面，點「設為共用」。另一位重新整理後應看到帶有 👥 圖示的筆記本，並能新增筆記、編輯、開啟附件以及匯出 Word。在兩個視窗開啟同一筆記並同時修改，讓第一個視窗先儲存，第二個視窗再儲存。後者會收到版本衝突提示，草稿會保留。

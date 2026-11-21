@@ -75,7 +75,7 @@ def main() -> None:
         raise SystemExit("帳號請使用 1 至 128 個文字、數字、底線、句點或連字號。")
     if partner and username == values.get("ADMIN_USERNAME"):
         raise SystemExit("兩組帳號名稱必須不同。")
-    minimum = 12 if partner else 8
+    minimum = 8
     password = read_masked(f"密碼（至少 {minimum} 字元）：")
     if not minimum <= len(password) <= 1024:
         raise SystemExit(f"密碼長度須為 {minimum} 至 1024 字元。")

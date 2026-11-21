@@ -52,10 +52,15 @@ def test_add_partner_preserves_existing_account(tmp_path: Path, monkeypatch: pyt
         f"SECRET_KEY={key}\nAPP_ORIGIN=https://notes.test\n",
         encoding="utf-8",
     )
-    new_password = secrets.token_urlsafe(24)
+    new_password = secrets.token_urlsafe(6)
     monkeypatch.setattr(setup_account, "ROOT", tmp_path)
     monkeypatch.setattr(sys, "argv", ["setup_account", "--partner"])
     monkeypatch.setattr("builtins.input", lambda prompt: "second")
+    # 測試最低長度前後的設定結果。
+    monkeypatch.setattr(setup_account, "read_masked", lambda prompt: new_password[:7])
+    with pytest.raises(SystemExit, match="8 至 1024"):
+        setup_account.main()
+    assert "PARTNER_USERNAME" not in dotenv_values(env, interpolate=False)
     monkeypatch.setattr(setup_account, "read_masked", lambda prompt: new_password)
     setup_account.main()
     values = dotenv_values(env, interpolate=False)
