@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>筆記工作區 | PeipeiNote</title>
   {% include "workspace_style.html" %}
+  {% from "note_updated.html" import note_updated %}
+  <script defer src="/static/library-search.js"></script>
 </head>
 <body>
   {% macro create_form(level, label, parent_id=none) %}
@@ -66,16 +68,39 @@
     </nav>
     <section class="panel notes" aria-labelledby="notes-heading">
       <h2 id="notes-heading" class="heading">筆記</h2>
+      <form id="library-search" class="workspace-search tw:grid tw:gap-2" method="get" action="/library/search">
+        <label>全文搜尋<input type="search" name="q" maxlength="160" placeholder="搜尋標題與內文" required></label>
+        <div class="tw:flex tw:items-end tw:gap-2">
+          <label class="tw:min-w-0 tw:flex-1">搜尋範圍<select name="book">
+            <option value="0">全部筆記本</option>
+            {% for book in books %}
+              <option value="{{ book.id }}"{% if active.get('notebook') == book.id %} selected{% endif %}>{{ book.name }}</option>
+            {% endfor %}
+          </select></label>
+          <button type="submit">搜尋</button>
+        </div>
+      </form>
+      <section id="search-results" aria-label="搜尋結果" aria-live="polite" hidden></section>
+      <div id="topic-notes">
+        {% if current_topic %}
+          <p class="crumb">{{ current_topic.name }}</p>
+          <ul class="list">
+            {% for note in notes %}
+              <li><a href="/?kind=note&amp;item_id={{ note.id }}"{% if active.get('note') == note.id %} aria-current="page"{% endif %}>
+                <span class="note-list-title">{{ note.title }}</span>
+                <span class="note-preview">{{ note.preview or '尚未輸入內容' }}</span>
+                {{ note_updated(note.updated_at) }}
+              </a></li>
+            {% else %}<li class="muted">這個主題還沒有筆記。</li>{% endfor %}
+          </ul>
+        {% elif kind == 'section' %}
+          <p class="muted">這是主題清單。請從左側選取一個主題，或先在下方建立主題。進入主題後，同一欄就能新增筆記。</p>
+          <div class="rule">{{ create_form('topic', '主題', selection.id) }}</div>
+        {% else %}
+          <p class="muted">選取左側的主題後，即可查看和新增筆記。</p>
+        {% endif %}
+      </div>
       {% if current_topic %}
-        <p class="crumb">{{ current_topic.name }}</p>
-        <ul class="list">
-          {% for note in notes %}
-            <li><a href="/?kind=note&amp;item_id={{ note.id }}"{% if active.get('note') == note.id %} aria-current="page"{% endif %}>
-              <span class="note-list-title">{{ note.title }}</span>
-              <span class="note-preview">{{ note.preview or '尚未輸入內容' }}</span>
-            </a></li>
-          {% else %}<li class="muted">這個主題還沒有筆記。</li>{% endfor %}
-        </ul>
         <div class="rule new-note" id="new-note">
           <form method="post" action="/workspace/note" class="stack">
             <input type="hidden" name="parent_id" value="{{ current_topic.id }}">
@@ -89,11 +114,6 @@
             <button class="primary" type="submit">新增筆記</button>
           </form>
         </div>
-      {% elif kind == 'section' %}
-        <p class="muted">這是主題清單。請從左側選取一個主題，或先在下方建立主題。進入主題後，同一欄就能新增筆記。</p>
-        <div class="rule">{{ create_form('topic', '主題', selection.id) }}</div>
-      {% else %}
-        <p class="muted">選取左側的主題後，即可查看和新增筆記。</p>
       {% endif %}
     </section>
     <section class="panel editor" aria-labelledby="editor-heading">
@@ -168,6 +188,7 @@
             <summary>另存為範本</summary>
             <form method="post" action="/library/templates" class="stack">
               <input type="hidden" name="note_id" value="{{ selection.id }}">
+              <p class="muted">範本保留文字與排版，內嵌圖片和附件不會複製。</p>
               <label>範本名稱<input name="name" maxlength="200" required></label>
               <button type="submit">另存已儲存的內容</button>
             </form>
@@ -215,14 +236,13 @@
         {% endif %}
         {% if kind != 'notebook' or owns_notebook %}
         <div class="rule">
-          {% if can_delete %}
             <form class="stack" method="post" action="/workspace/{{ kind }}/{{ selection.id }}/delete">
               <label><input name="confirmed" type="checkbox" value="true" required> 確認刪除這個{{ label }}</label>
+              {% if has_children %}
+                <label><input name="delete_descendants" type="checkbox" value="true" required> 一併永久刪除所有下層項目與附件</label>
+              {% endif %}
               <button class="danger" type="submit">刪除{{ label }}</button>
             </form>
-          {% else %}
-            <p class="muted nonempty">此{{ label }}仍有下層資料。移動或清空後即可刪除。</p>
-          {% endif %}
         </div>
         {% endif %}
         </details>

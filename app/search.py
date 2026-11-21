@@ -1,7 +1,8 @@
+from datetime import datetime
 from html.parser import HTMLParser
 import re
 
-from sqlalchemy import inspect, text
+from sqlalchemy import DateTime, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -76,7 +77,7 @@ def initialize_search(engine: Engine) -> None:
 
 
 SEARCH_SELECT = """
-    SELECT n.id, s.title, s.body, b.name AS notebook, t.name AS topic
+    SELECT n.id, n.updated_at, s.title, s.body, b.name AS notebook, t.name AS topic
     FROM note_search AS s
     JOIN notes AS n ON n.id = s.rowid
     JOIN topics AS t ON n.topic_id = t.id
@@ -90,7 +91,9 @@ SEARCH_SELECT = """
 """
 
 
-def search_rows(db: Session, query: str, book: int | None, tag: int | None, page: int, user_id: int) -> tuple[list[dict], bool]:
+def search_rows(
+    db: Session, query: str, book: int | None, tag: int | None, page: int, user_id: int,
+) -> tuple[list[dict[str, str | int | datetime | None]], bool]:
     # 將使用者輸入綁定為參數，長詞走 FTS5，短詞仍可搜尋中文。
     if len(query) >= 3:
         condition = " AND note_search MATCH :phrase ORDER BY n.id DESC "
@@ -98,7 +101,7 @@ def search_rows(db: Session, query: str, book: int | None, tag: int | None, page
         condition = " AND (instr(lower(s.title), lower(:query)) > 0 OR instr(lower(s.body), lower(:query)) > 0) ORDER BY n.id DESC "
     else:
         condition = " ORDER BY n.id DESC "
-    statement = text(SEARCH_SELECT + condition + "LIMIT :limit OFFSET :offset")
+    statement = text(SEARCH_SELECT + condition + "LIMIT :limit OFFSET :offset").columns(updated_at=DateTime())
     rows = db.execute(statement, {
         "user_id": user_id, "book": book, "tag": tag, "query": query,
         "phrase": '"' + query.replace('"', '""') + '"',
@@ -109,8 +112,11 @@ def search_rows(db: Session, query: str, book: int | None, tag: int | None, page
         body = row["body"]
         match = re.search(re.escape(query), body, re.IGNORECASE) if query else None
         start = max(0, match.start() - 24) if match else 0
-        end = min(len(body), start + 110)
-        summary = ("…" if start else "") + body[start:end] + ("…" if end < len(body) else "")
+        end = min(len(body), max(start + 110, match.end())) if match else min(len(body), 110)
+        # 只命中標題時，結果已顯示完整標題，省略無關的內文片段。
+        summary = ""
+        if match or not query:
+            summary = ("…" if start else "") + body[start:end] + ("…" if end < len(body) else "")
         results.append({"id": row["id"], "title": row["title"], "notebook": row["notebook"],
-                        "topic": row["topic"], "summary": summary})
+                        "topic": row["topic"], "summary": summary, "updated_at": row["updated_at"]})
     return results, len(rows) > PAGE_SIZE

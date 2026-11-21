@@ -150,6 +150,17 @@ def lookup_attachment(db: Session, file_id: str, user_id: int) -> Attachment:
     raise HTTPException(404, "找不到這個附件。")
 
 
+def remove_stored_attachment(uploads: Path, file_id: str) -> None:
+    # 資料庫交易完成後才刪除磁碟檔，並拒絕不合法的儲存名稱。
+    if not FILE_ID.fullmatch(file_id):
+        logger.error("跳過不合法的附件儲存名稱")
+        return
+    try:
+        (uploads / file_id).unlink(missing_ok=True)
+    except OSError:
+        logger.exception("Could not remove detached upload %s", file_id)
+
+
 def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRouter:
     # 附件端點共用應用程式既有的登入和同源驗證。
     router = APIRouter()
@@ -162,6 +173,7 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
             raise HTTPException(404, "找不到這則筆記。")
         # 先查權限再接收資料，真正寫檔前在交易中重查。
         def check_note() -> None:
+            # 上傳之前只確認筆記存在且屬於目前帳號可用的筆記本。
             with Session(engine) as db:
                 if db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) is None:
                     raise HTTPException(404, "找不到這則筆記。")
@@ -211,10 +223,7 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
             if note and note.content_format == "html" and f'src="/api/files/{file_id}"' in note.content:
                 raise HTTPException(409, "請先從正文移除這張圖片並儲存筆記。")
             db.delete(file)
-        try:
-            (uploads / file_id).unlink(missing_ok=True)
-        except OSError:
-            logger.exception("Could not remove detached upload %s", file_id)
+        remove_stored_attachment(uploads, file_id)
         return RedirectResponse(f"/?kind=note&item_id={note_id}", status_code=303)
 
     return router

@@ -1,18 +1,21 @@
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path as FilePath
 from typing import Annotated
-from uuid import uuid4
 
 from fastapi import APIRouter, Form, HTTPException, Path, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import column, func, or_, select, table
+from sqlalchemy import Select, column, delete, func, or_, select, table
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.access import containing_book, notebook_items, visible_to
+from app.attachments import remove_stored_attachment
 from app.auth import ROOT, Settings, require_user
-from app.database import Attachment, Note, Notebook, NotebookPosition, Tag, Template, Topic, TopicList, User, note_tags
+from app.database import (
+    Attachment, Note, Notebook, NotebookPosition, Tag, Template, Topic, TopicList, User, new_note_version, note_tags,
+)
 
 from app.richtext import NoteFormat, clean_html, editor_source, template_html
 
@@ -126,7 +129,7 @@ def render_workspace(
         owns_notebook = active_book is not None and active_book.owner_id == user_id
         notes = db.execute(
             notebook_items(Note, user_id).with_only_columns(
-                Note.id, Note.title, func.substr(search_text.c.body, 1, 100).label("preview")
+                Note.id, Note.title, Note.updated_at, func.substr(search_text.c.body, 1, 100).label("preview")
             )
             .outerjoin(search_text, search_text.c.rowid == Note.id)
             .where(Note.topic_id == topic_id).order_by(Note.id)
@@ -178,7 +181,7 @@ def render_workspace(
                 "label": LEVELS[kind].label if kind else None,
                 "child_kind": child.value if child else None, "child_label": LEVELS[child].label if child else None,
                 "destinations": destinations,
-                "can_delete": selection is not None and not has_children(db, kind, selection.id),
+                "has_children": selection is not None and kind is not None and has_children(db, kind, selection.id),
                 "can_raise": bool(owns_notebook and kind == Kind.notebook and own_books[0].id != selection.id),
                 "can_lower": bool(owns_notebook and kind == Kind.notebook and own_books[-1].id != selection.id),
             },
@@ -233,11 +236,31 @@ def has_children(db: Session, kind: Kind, item_id: int) -> bool:
     return existing is not None
 
 
-def remove_item(db: Session, kind: Kind, item: Item) -> None:
-    # 重新檢查資料庫，避免使用者送出過期表單而刪除父層。
-    if has_children(db, kind, item.id):
-        raise HTTPException(409, "此項目仍有下層資料。請先移動或清空後再刪除。")
-    db.delete(item)
+def remove_item(db: Session, kind: Kind, item: Item, delete_descendants: bool) -> list[str]:
+    # 已驗權的項目若有下層資料，須收到另外一次明確確認。
+    if not delete_descendants and has_children(db, kind, item.id):
+        raise HTTPException(409, "此項目仍有下層資料或附件，請重新開啟頁面並確認是否一併刪除。")
+
+    # 沿外鍵取得子樹，在同一筆交易由附件、筆記、主題到上層依序刪除。
+    levels: list[tuple[type[Notebook] | type[TopicList] | type[Topic] | type[Note], Select[tuple[int]]]] = []
+    model = LEVELS[kind].model
+    ids = select(model.id).where(model.id == item.id)
+    levels.append((model, ids))
+    child_kind = CHILD.get(kind)
+    while child_kind is not None:
+        child = LEVELS[child_kind]
+        model = child.model
+        ids = select(model.id).where(getattr(model, child.parent_key).in_(ids))
+        levels.append((model, ids))
+        child_kind = CHILD.get(child_kind)
+
+    attachments = list(db.scalars(select(Attachment.storage_name).where(Attachment.note_id.in_(ids))))
+    db.execute(delete(Attachment).where(Attachment.note_id.in_(ids)))
+    # 舊版資料庫的關聯表可能沒有筆記刪除串聯規則。
+    db.execute(delete(note_tags).where(note_tags.c.note_id.in_(ids)))
+    for model, ids in reversed(levels):
+        db.execute(delete(model).where(model.id.in_(ids)).execution_options(synchronize_session=False))
+    return attachments
 
 
 def inbox_topic(db: Session, user_id: int) -> int:
@@ -264,7 +287,7 @@ def inbox_topic(db: Session, user_id: int) -> int:
     return topic.id
 
 
-def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
+def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> APIRouter:
     # 所有資料變更共用登入驗證與同源檢查。
     router = APIRouter(prefix="/workspace")
 
@@ -322,6 +345,7 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
         target_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         direction: Annotated[int, Form(ge=-1, le=1)] = 0,
         confirmed: Annotated[bool, Form()] = False,
+        delete_descendants: Annotated[bool, Form()] = False,
         is_shared: Annotated[bool, Form()] = False,
     ) -> Response:
         # 將讀取、父層驗證和修改放在同一筆 SQLite 交易中。
@@ -329,6 +353,7 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
         level = LEVELS[kind]
         next_kind, next_id = kind, item_id
         saved_version = None
+        removed_files: list[str] = []
         with Session(engine) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             if action == Action.share and kind != Kind.notebook:
@@ -349,7 +374,7 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
                             context={"note_url": item_url(kind, item_id), "title": name, "draft": content},
                             headers={"Cache-Control": "no-store"},
                         )
-                    item.version = saved_version = uuid4().hex
+                    item.version = saved_version = new_note_version()
                 save_fields(item, name, content, content_format)
             elif action == Action.move:
                 if level.parent is None:
@@ -364,13 +389,15 @@ def workspace_actions(engine: Engine, settings: Settings) -> APIRouter:
                         raise HTTPException(404, "找不到可移動的目的地。")
                     setattr(item, level.parent_key, target_id)
                     if isinstance(item, Note):
-                        item.version = uuid4().hex
+                        item.version = new_note_version()
             else:
                 if not confirmed:
                     raise HTTPException(422, "請勾選確認後再刪除。")
                 next_kind = level.parent
                 next_id = getattr(item, level.parent_key) if next_kind else None
-                remove_item(db, kind, item)
+                removed_files = remove_item(db, kind, item, delete_descendants)
+        for file_id in removed_files:
+            remove_stored_attachment(uploads, file_id)
         if saved_version and request.headers.get("accept") == "application/json":
             return JSONResponse({"version": saved_version}, headers={"Cache-Control": "no-store"})
         return RedirectResponse(item_url(next_kind, next_id), status_code=303)

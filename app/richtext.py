@@ -7,10 +7,16 @@ from sqlalchemy.engine import Engine
 
 NoteFormat = Literal["plain", "html"]
 
+
+def local_image_url(value: str) -> str | None:
+    # 只允許相對網址引用登入後可讀取的站內圖片。
+    return value if re.fullmatch(r"/api/files/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)", value) else None
+
+
 def filter_attribute(tag: str, name: str, value: str) -> str | None:
     # 圖片只可引用經過登入保護的站內圖片位址。
     if tag == "img" and name == "src":
-        if not re.fullmatch(r"/api/files/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)", value):
+        if local_image_url(value) is None:
             return None
     if tag == "img" and name in {"width", "height"}:
         # 縮放數值只能是有上限的像素尺寸，不接受 CSS 或任意屬性。
@@ -36,7 +42,7 @@ CLEAN_OPTIONS = dict(
         "li": {"data-type": {"taskItem"}, "data-checked": {"true", "false"}},
     },
     url_schemes={"http", "https", "mailto"},
-    url_relative=lambda value: value if re.fullmatch(r"/api/files/[0-9a-f]{32}\.(?:png|jpe?g|gif|webp)", value) else None,
+    url_relative=local_image_url,
 )
 
 
@@ -72,3 +78,6 @@ def update_note_schema(engine: Engine) -> None:
             connection.exec_driver_sql(
                 "ALTER TABLE notes ADD COLUMN version VARCHAR NOT NULL DEFAULT 'legacy'"
             )
+        if "updated_at" not in columns:
+            # 舊筆記沒有可靠的歷史時間，保留空值直到第一次更新。
+            connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN updated_at DATETIME")

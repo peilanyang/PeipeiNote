@@ -214,10 +214,18 @@ def test_two_tabs_keep_the_later_draft_on_version_conflict(
 
 
 def test_list_only_loads_a_100_character_summary_and_opens_full_note(
-    client: TestClient, credentials: dict[str, str],
+    client: TestClient, credentials: dict[str, str], tmp_path: Path,
 ) -> None:
     # 中欄只顯示 100 個可見字元，選取筆記後右欄仍可讀完整正文。
     url = open_test_note(client, credentials)
+    with closing(sqlite3.connect(tmp_path / "test.db")) as database, database:
+        database.execute("UPDATE notes SET updated_at = ?", ("2000-01-02 03:04:05",))
+    before = client.get(url).text
+    assert 'datetime="2000-01-02T03:04:05Z"' in before
+    assert 'id="library-search"' in before and 'name="book"' in before
+    assert 'href="/static/workspace.css"' in before
+    css = client.get("/static/workspace.css")
+    assert css.status_code == 200 and r".tw\:grid" in css.text
     visible = "字" * 99 + "&"
     tail = "這段只應出現在右欄"
     submit(client, "/workspace/note/1/save", name="原標題", content_format="html",
@@ -225,6 +233,7 @@ def test_list_only_loads_a_100_character_summary_and_opens_full_note(
     topic = client.get("/?kind=topic&item_id=1")
     assert topic.status_code == 200
     assert f'<span class="note-preview">{visible[:-1]}&amp;</span>' in topic.text
+    assert '<time class="note-updated"' in topic.text and "2000-01-02T03:04:05Z" not in topic.text
     assert tail not in topic.text
     assert tail in client.get(url).text
 
@@ -396,6 +405,37 @@ def test_workspace_guards_mutations_and_preserves_children(
     assert "跨站" not in result
 
 
+def test_confirmed_notebook_removal_deletes_its_tree_and_files(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path,
+) -> None:
+    # 一般確認保留原資料。第二個確認才會一併移除附件、標籤關聯及搜尋結果。
+    open_test_note(client, credentials)
+    submit(client, "/workspace/note/1/save", name="待刪筆記", content="整本刪除關鍵詞")
+    submit(client, "/library/tags", name="保留標籤")
+    submit(client, "/library/notes/1/tags", tag_id=1, action="add")
+    uploaded = client.post(
+        "/api/notes/1/files", content=b"attachment", headers={"Origin": ORIGIN, "X-Filename": "sample.txt"},
+    )
+    assert uploaded.status_code == 201
+    file_info = uploaded.json()
+    submit(client, "/workspace/notebook", name="另一本")
+    book = client.get("/?kind=notebook&item_id=1")
+    assert 'name="delete_descendants"' in book.text
+    path = "/workspace/notebook/1/delete"
+    assert client.post(path, data={"confirmed": "true"}, headers={"Origin": ORIGIN}).status_code == 409
+    assert client.get(file_info["url"]).status_code == 200
+    assert submit(client, path, confirmed="true", delete_descendants="true") == "/"
+    assert client.get("/?kind=note&item_id=1").status_code == 404
+    assert client.get(file_info["url"]).status_code == 404
+    assert not (tmp_path / "uploads" / file_info["id"]).exists()
+    assert "待刪筆記" not in client.get("/library/search", params={"q": "整本刪除關鍵詞"}).text
+    assert "保留標籤" in client.get("/library/tags").text
+    assert "另一本" in client.get("/").text
+    with closing(sqlite3.connect(tmp_path / "test.db")) as database:
+        assert database.execute("SELECT count(*) FROM note_tags").fetchone() == (0,)
+        assert database.execute("SELECT count(*) FROM topics").fetchone() == (0,)
+
+
 def test_workspace_sanitizes_html_before_storing(
     client: TestClient, credentials: dict[str, str], tmp_path: Path,
 ) -> None:
@@ -531,6 +571,7 @@ def test_search_tags_and_template_workflow(client: TestClient, credentials: dict
     assert "出差範本" in topic
     note = submit(client, "/workspace/note", parent_id=1, name="北方之旅", template_id=1)
     assert "&lt;h2&gt;行程規劃&lt;/h2&gt;" in client.get(note).text
+    assert "內嵌圖片和附件不會複製" in client.get(note).text
     assert client.post("/workspace/note", data={"parent_id": 1, "name": "錯誤", "template_id": 99}, headers=headers).status_code == 404
     submit(client, "/workspace/note", parent_id=2, name="假期準備", template_id="")
     submit(client, "/workspace/note/2/save", name="假期準備", content='行前筆記：搭飛機到北海道。查找 "登機門"。')
@@ -544,9 +585,11 @@ def test_search_tags_and_template_workflow(client: TestClient, credentials: dict
 
     across = client.get("/library/search", params={"q": "北海道", "partial": "true"}).text
     assert "北方之旅" in across and "假期準備" in across and "明年到北海道旅行" in across
+    assert '<time class="note-updated"' in across
     scoped = client.get("/library/search", params={"q": "北海道", "book": 2}).text
     assert "假期準備" in scoped and "北方之旅" not in scoped
-    assert "北方之旅" in client.get("/library/search", params={"q": "北方"}).text
+    title_only = client.get("/library/search", params={"q": "北方"}).text
+    assert "北方之旅" in title_only and "明年到北海道旅行" not in title_only
     assert "假期準備" in client.get("/library/search", params={"q": '"登機門"'}).text
 
     submit(client, "/library/notes/1/tags", action="remove", tag_id=1)

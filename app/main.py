@@ -72,7 +72,7 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[site.hostname])
 
     app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
-    app.include_router(workspace_actions(engine, settings))
+    app.include_router(workspace_actions(engine, settings, db_path.parent / "uploads"))
     app.include_router(library_routes(engine, settings))
     app.include_router(export_routes(engine, settings, db_path.parent / 'uploads'))
     app.include_router(attachment_routes(engine, settings, db_path.parent / 'uploads'))

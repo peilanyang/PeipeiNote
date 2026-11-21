@@ -1,0 +1,7 @@
+{% macro note_updated(updated_at) -%}
+  {% if updated_at %}
+    <time class="note-updated" datetime="{{ updated_at.isoformat() }}Z">{{ updated_at.strftime('%Y-%m-%d %H:%M') }} UTC</time>
+  {% else %}
+    <span class="note-updated">更新時間未知</span>
+  {% endif %}
+{%- endmacro %}

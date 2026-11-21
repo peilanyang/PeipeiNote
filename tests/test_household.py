@@ -145,6 +145,9 @@ def test_sharing_grants_and_revokes_content_and_attachment_access(family: tuple[
     assert "設為私人" in b.get(book_url).text and share_url not in a.get(book_url).text
     assert a.post(share_url, data={"is_shared": "false"}, headers=HEADERS).status_code == 404
     assert a.post(f"/workspace/notebook/{book}/delete", data={"confirmed": "true"}, headers=HEADERS).status_code == 404
+    assert a.post(f"/workspace/notebook/{book}/delete", data={
+        "confirmed": "true", "delete_descendants": "true",
+    }, headers=HEADERS).status_code == 404
     for target in (a_topic, hidden_topic):
         assert a.post(f"/workspace/note/{note}/move", data={"target_id": target}, headers=HEADERS).status_code == 404
     for file_url, data in files:
@@ -284,6 +287,7 @@ def test_legacy_database_preserves_notes_tags_templates_and_files(
             assert note.status_code == (200 if visible else 404)
             if visible:
                 assert "原有內文" in note.text and "原有標籤" in note.text
+                assert "更新時間未知" in note.text
                 assert browser.get(f"/api/files/{file_id}").content == b"old"
                 assert "舊筆記" in browser.get("/library/search?q=原有內文").text
                 assert "原有版型" in browser.get("/library/templates?selected=60").text

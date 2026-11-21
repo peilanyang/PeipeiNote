@@ -1,8 +1,9 @@
+from datetime import datetime
 from pathlib import Path
 from sqlite3 import Connection
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Table, UniqueConstraint, URL, create_engine, event, inspect, select, update
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Table, UniqueConstraint, URL, create_engine, event, func, inspect, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -56,6 +57,11 @@ class Topic(Base):
     name: Mapped[str]
 
 
+def new_note_version() -> str:
+    # 建立隨機版本，供儲存與移動時判斷草稿是否過期。
+    return uuid4().hex
+
+
 class Note(Base):
     __tablename__ = "notes"
 
@@ -64,7 +70,10 @@ class Note(Base):
     title: Mapped[str]
     content: Mapped[str] = mapped_column(default="")
     content_format: Mapped[str] = mapped_column(server_default="plain")
-    version: Mapped[str] = mapped_column(default=lambda: uuid4().hex, server_default="legacy")
+    version: Mapped[str] = mapped_column(default=new_note_version, server_default="legacy")
+    updated_at: Mapped[datetime | None] = mapped_column(
+        default=func.current_timestamp(), onupdate=func.current_timestamp(),
+    )
 
 
 class Tag(Owned, Base):
