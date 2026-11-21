@@ -31,7 +31,7 @@ const toolbar = document.querySelector('#rich-toolbar');
 const format = document.querySelector('#content-format');
 
 if (source && editorHost && toolbar && format) {
-  // 將舊筆記以純文字帶入編輯器，原本的尖括號仍是文字。
+  // 將舊記事以純文字帶入編輯器，原本的尖括號仍是文字。
   const content = format.value === 'html' ? source.value : {
     type: 'doc',
     content: source.value.replace(/\r\n?/g, '\n').split('\n').map(line => ({

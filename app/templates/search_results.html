@@ -1,7 +1,7 @@
 {% from "note_updated.html" import note_updated %}
 <section id="search-results" class="rule" aria-label="搜尋結果" aria-live="polite">
   {% if not active %}
-    <p class="muted">輸入關鍵字以搜尋筆記。</p>
+    <p class="muted">輸入關鍵字以搜尋記事。</p>
   {% elif rows %}
     <ul class="list">
       {% for result in rows %}
@@ -16,7 +16,7 @@
       {% endfor %}
     </ul>
   {% else %}
-    <p class="muted">找不到符合條件的筆記。</p>
+    <p class="muted">找不到符合條件的記事。</p>
   {% endif %}
   {% if previous or next %}
     <nav class="inline" aria-label="搜尋結果分頁">

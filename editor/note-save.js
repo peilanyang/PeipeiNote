@@ -32,7 +32,7 @@ export function setupNoteSaving(editor, form) {
     clearTimeout(timer);
     if (conflict || changed === persisted) return;
     if (!form.reportValidity()) {
-      status.textContent = '儲存失敗：請輸入筆記標題。';
+      status.textContent = '儲存失敗：請輸入記事標題。';
       return;
     }
     if (saving) {

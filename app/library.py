@@ -38,7 +38,7 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
         page: Annotated[int, Query(ge=1, le=100000)] = 1,
         partial: bool = False,
     ) -> Response:
-        # 查詢標題及可見內文，並提供可開啟原筆記的分頁清單。
+        # 查詢標題及可見內文，並提供可開啟原記事的分頁清單。
         user_id = require_user(engine, settings, request)
         query = note_text(q, "plain")
         with Session(engine) as db:
@@ -95,7 +95,7 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
         note_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         is_shared: Annotated[bool | None, Form()] = None,
     ) -> RedirectResponse:
-        # 用交易處理名稱檢查、刪除及筆記快照，維持一致的資料狀態。
+        # 用交易處理名稱檢查、刪除及記事快照，維持一致的資料狀態。
         user_id = require_user(engine, settings, request, write=True)
         model = Tag if kind == "tags" else Template
         with Session(engine) as db, db.begin():
@@ -143,7 +143,7 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
             get_item(db, Kind.note, note_id, user_id)
             tag_access = visible_to(Tag, user_id)
             if action == "remove":
-                # 共用筆記的編輯者可以移除已附上的標籤，但不能附上別人的私人標籤。
+                # 共用記事的編輯者可以移除已附上的標籤，但不能附上別人的私人標籤。
                 linked = select(note_tags.c.tag_id).where(note_tags.c.note_id == note_id)
                 tag_access = or_(tag_access, Tag.id.in_(linked))
             if db.scalar(select(Tag.id).where(Tag.id == tag_id, tag_access)) is None:

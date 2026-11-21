@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ note.title }} | 列印筆記</title>
+  <title>{{ note.title }} | 列印記事</title>
   <style>
     body { margin: 0; padding: 1.5rem; background: #f4f1f8; color: #292336;
       font: 16px/1.55 "Segoe UI", "Microsoft JhengHei", sans-serif; }
@@ -39,7 +39,7 @@
 </head>
 <body>
   <nav class="print-actions" aria-label="列印操作">
-    <a href="/?kind=note&amp;item_id={{ note.id }}">返回筆記</a>
+    <a href="/?kind=note&amp;item_id={{ note.id }}">返回記事</a>
     <button type="button" id="print-note">列印／另存 PDF</button>
   </nav>
   <article>

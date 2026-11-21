@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>筆記工作區 | PeipeiNote</title>
+  <title>記事工作區 | PeipeiNote</title>
   {% include "workspace_style.html" %}
   {% from "note_updated.html" import note_updated %}
-  <script defer src="/static/library-search.js"></script>
+  {% if current_topic %}<script defer src="/static/library-search.js"></script>{% endif %}
 </head>
 <body>
-  {% macro create_form(level, label, parent_id=none) %}
+  {% macro create_form(level, label, notebook_id=none) %}
     <form method="post" action="/workspace/{{ level }}" class="stack">
-      {% if parent_id is not none %}<input type="hidden" name="parent_id" value="{{ parent_id }}">{% endif %}
+      {% if notebook_id is not none %}<input type="hidden" name="notebook_id" value="{{ notebook_id }}">{% endif %}
       <label>{{ label }}名稱<input name="name" maxlength="200" required></label>
       <button class="primary" type="submit">新增{{ label }}</button>
     </form>
@@ -21,14 +21,18 @@
     <div class="header-actions">
       <a class="button-link" href="/library/search{% if active.get('notebook') %}?book={{ active.get('notebook') }}{% endif %}">全文搜尋</a>
       {% if current_topic %}
-        <a class="button-link primary" href="#new-note">新增筆記</a>
+        <a class="button-link primary" href="#new-note">新增記事</a>
       {% else %}
-        <a class="button-link primary" href="/?new_note=true#quick-note">新增筆記</a>
+        <a class="button-link primary" href="/?new_note=true#quick-note">新增記事</a>
       {% endif %}
+      <details class="notebook-create">
+        <summary class="button-link">新增筆記本</summary>
+        {{ create_form('notebook', '筆記本') }}
+      </details>
       <form method="post" action="/logout"><button type="submit">登出</button></form>
     </div>
   </header>
-  <main class="workspace">
+  <main class="workspace{% if not current_topic %} workspace-wide{% endif %}">
     <nav class="panel" aria-labelledby="books-heading">
       <h2 class="heading" id="books-heading">筆記本</h2>
       {% if books %}
@@ -37,16 +41,9 @@
             <li><details{% if active.get('notebook') == book.id %} open{% endif %}>
               <summary><a href="/?kind=notebook&amp;item_id={{ book.id }}"{% if kind == 'notebook' and active.get('notebook') == book.id %} aria-current="page"{% endif %}>{{ book.name }}</a>{% if book.is_shared %} <span role="img" aria-label="家庭共用" title="家庭共用">👥</span>{% endif %}</summary>
               <ul class="tree">
-                {% for section in sections_by_book.get(book.id, []) %}
-                  <li><details{% if active.get('section') == section.id %} open{% endif %}>
-                    <summary><a href="/?kind=section&amp;item_id={{ section.id }}"{% if kind == 'section' and active.get('section') == section.id %} aria-current="page"{% endif %}>{{ section.name }}</a></summary>
-                    <ul class="tree">
-                      {% for topic in topics_by_section.get(section.id, []) %}
-                        <li><a class="leaf" href="/?kind=topic&amp;item_id={{ topic.id }}"{% if active.get('topic') == topic.id %} aria-current="page"{% endif %}>{{ topic.name }}</a></li>
-                      {% else %}<li class="muted">尚無主題</li>{% endfor %}
-                    </ul>
-                  </details></li>
-                {% else %}<li class="muted">尚無主題清單</li>{% endfor %}
+                {% for topic in topics_by_book.get(book.id, []) %}
+                  <li><a class="leaf" href="/?kind=topic&amp;item_id={{ topic.id }}"{% if active.get('topic') == topic.id %} aria-current="page"{% endif %}>{{ topic.name }}</a></li>
+                {% else %}<li class="muted">尚無主題</li>{% endfor %}
               </ul>
             </details></li>
           {% endfor %}
@@ -59,15 +56,15 @@
         </ul>
         <p><a href="/library/templates">範本管理</a></p>
       </div>
-      <div class="{% if books %}rule{% endif %}">{{ create_form('notebook', '筆記本') }}</div>
       {% if web_backup %}
       <form class="rule" method="post" action="/backup">
         <button type="submit">下載完整備份</button>
       </form>
       {% endif %}
     </nav>
+    {% if current_topic %}
     <section class="panel notes" aria-labelledby="notes-heading">
-      <h2 id="notes-heading" class="heading">筆記</h2>
+      <h2 id="notes-heading" class="heading">記事</h2>
       <form id="library-search" class="workspace-search tw:grid tw:gap-2" method="get" action="/library/search">
         <label>全文搜尋<input type="search" name="q" maxlength="160" placeholder="搜尋標題與內文" required></label>
         <div class="tw:flex tw:items-end tw:gap-2">
@@ -82,40 +79,32 @@
       </form>
       <section id="search-results" aria-label="搜尋結果" aria-live="polite" hidden></section>
       <div id="topic-notes">
-        {% if current_topic %}
-          <p class="crumb">{{ current_topic.name }}</p>
-          <ul class="list">
-            {% for note in notes %}
-              <li><a href="/?kind=note&amp;item_id={{ note.id }}"{% if active.get('note') == note.id %} aria-current="page"{% endif %}>
-                <span class="note-list-title">{{ note.title }}</span>
-                <span class="note-preview">{{ note.preview or '尚未輸入內容' }}</span>
-                {{ note_updated(note.updated_at) }}
-              </a></li>
-            {% else %}<li class="muted">這個主題還沒有筆記。</li>{% endfor %}
-          </ul>
-        {% elif kind == 'section' %}
-          <p class="muted">這是主題清單。請從左側選取一個主題，或先在下方建立主題。進入主題後，同一欄就能新增筆記。</p>
-          <div class="rule">{{ create_form('topic', '主題', selection.id) }}</div>
-        {% else %}
-          <p class="muted">選取左側的主題後，即可查看和新增筆記。</p>
-        {% endif %}
+        <p class="crumb">{{ current_topic.name }}</p>
+        <ul class="list">
+          {% for note in notes %}
+            <li><a href="/?kind=note&amp;item_id={{ note.id }}"{% if active.get('note') == note.id %} aria-current="page"{% endif %}>
+              <span class="note-list-title">{{ note.title }}</span>
+              <span class="note-preview">{{ note.preview or '尚未輸入內容' }}</span>
+              {{ note_updated(note.updated_at) }}
+            </a></li>
+          {% else %}<li class="muted">這個主題還沒有記事。</li>{% endfor %}
+        </ul>
       </div>
-      {% if current_topic %}
-        <div class="rule new-note" id="new-note">
-          <form method="post" action="/workspace/note" class="stack">
-            <input type="hidden" name="parent_id" value="{{ current_topic.id }}">
-            <label>筆記名稱<input name="name" maxlength="200" required></label>
-            {% if note_templates %}
-              <label>套用範本<select name="template_id">
-                <option value="">空白筆記</option>
-                {% for template in note_templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
-              </select></label>
-            {% endif %}
-            <button class="primary" type="submit">新增筆記</button>
-          </form>
-        </div>
-      {% endif %}
+      <div class="rule new-note" id="new-note">
+        <form method="post" action="/workspace/note" class="stack">
+          <input type="hidden" name="parent_id" value="{{ current_topic.id }}">
+          <label>記事名稱<input name="name" maxlength="200" required></label>
+          {% if note_templates %}
+            <label>套用範本<select name="template_id">
+              <option value="">空白記事</option>
+              {% for template in note_templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
+            </select></label>
+          {% endif %}
+          <button class="primary" type="submit">新增記事</button>
+        </form>
+      </div>
     </section>
+    {% endif %}
     <section class="panel editor" aria-labelledby="editor-heading">
       {% if selection %}
         <p class="crumb">{{ label }}</p>
@@ -130,7 +119,7 @@
           {% endif %}
         </div>
         {% if kind == 'note' %}
-          <nav class="inline" aria-label="筆記匯出">
+          <nav class="inline" aria-label="記事匯出">
             <a class="button-link" href="/export/notes/{{ selection.id }}.docx">匯出 Word</a>
             <a class="button-link" href="/print/notes/{{ selection.id }}">列印／另存 PDF</a>
           </nav>
@@ -144,15 +133,15 @@
             {% endif %}
           </div>
         {% endif %}
-        {% if child_kind == 'section' %}
-          <div class="rule">{{ create_form(child_kind, child_label, selection.id) }}</div>
+        {% if kind == 'notebook' %}
+          <div class="rule create-child">{{ create_form('topic', '主題', selection.id) }}</div>
         {% endif %}
         {% if kind != 'note' %}
           <details class="rule">
             <summary>管理{{ label }}（改名、移動或刪除）</summary>
         {% endif %}
         <form class="stack rule{% if kind == 'note' %} note-form{% endif %}" method="post" action="/workspace/{{ kind }}/{{ selection.id }}/save">
-          <label>{{ '筆記標題' if kind == 'note' else label ~ '名稱' }}
+          <label>{{ '記事標題' if kind == 'note' else label ~ '名稱' }}
             <input name="name" maxlength="200" value="{{ selection.title if kind == 'note' else selection.name }}" required>
           </label>
           {% if kind == 'note' %}
@@ -160,7 +149,7 @@
             {% set editor_upload_url = '/api/notes/' ~ selection.id ~ '/files' %}
             {% include "note_editor.html" %}
           {% endif %}
-          <button class="primary" type="submit">{{ '儲存筆記' if kind == 'note' else '儲存名稱' }}</button>
+          <button class="primary" type="submit">{{ '儲存記事' if kind == 'note' else '儲存名稱' }}</button>
         </form>
         {% if kind == 'note' %}
           <section class="rule" aria-labelledby="note-tags-heading">
@@ -213,12 +202,12 @@
             </ul>
           </section>
           <details class="rule editor-actions">
-            <summary>管理筆記（移動或刪除）</summary>
+            <summary>管理記事（移動或刪除）</summary>
         {% endif %}
         {% if destinations %}
           <form class="stack rule" method="post" action="/workspace/{{ kind }}/{{ selection.id }}/move">
             <label>移動到
-              <select name="target_id" required>
+              <select name="{{ 'notebook_id' if kind == 'topic' else 'target_id' }}" required>
                 <option value="">選擇目的地</option>
                 {% for id, path in destinations %}<option value="{{ id }}">{{ path }}</option>{% endfor %}
               </select>
@@ -247,9 +236,9 @@
         {% endif %}
         </details>
       {% elif quick_create %}
-        <h3 class="heading" id="editor-heading">新增筆記</h3>
+        <h3 class="heading" id="editor-heading">新增記事</h3>
         <form class="stack rule quick-note" id="quick-note" method="post" action="/workspace/note">
-          <label>筆記名稱<input name="name" maxlength="200" required autofocus></label>
+          <label>記事名稱<input name="name" maxlength="200" required autofocus></label>
           {% if quick_topics %}
             <label>放在哪個主題<select name="parent_id" required>
               {% if quick_topics|length > 1 %}<option value="">選擇主題</option>{% endif %}
@@ -257,20 +246,19 @@
             </select></label>
           {% else %}
             <input type="hidden" name="use_inbox" value="true">
-            <p class="muted">第一則筆記會放在「收件匣 › 一般 › 隨手記」。</p>
+            <p class="muted">第一則記事會放在「收件匣 › 隨手記」。</p>
           {% endif %}
           {% if note_templates %}
             <label>套用範本<select name="template_id">
-              <option value="">空白筆記</option>
+              <option value="">空白記事</option>
               {% for template in note_templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
             </select></label>
           {% endif %}
-          <div class="inline"><button class="primary" type="submit">建立筆記</button><a class="button-link" href="/">取消</a></div>
+          <div class="inline"><button class="primary" type="submit">建立記事</button><a class="button-link" href="/">取消</a></div>
         </form>
       {% else %}
-        <h3 class="heading" id="editor-heading">筆記工作區</h3>
-        <p class="muted">已登入。你的筆記工作區已就緒。</p>
-        <p class="muted">{% if books %}從左側開啟筆記本，或選擇主題開始編輯。{% else %}先從左欄新增一本筆記本。{% endif %}</p>
+        <h3 class="heading" id="editor-heading">記事工作區</h3>
+        <p class="muted">{% if books %}從左側選擇主題開啟記事。{% else %}從右上方新增第一本筆記本。{% endif %}</p>
       {% endif %}
     </section>
   </main>

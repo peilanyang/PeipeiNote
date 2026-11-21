@@ -35,6 +35,6 @@ def containing_book(db: Session, model: type[NotebookItem], item_id: int, user_i
 
 
 def search_label(user_id: int) -> ColumnElement[bool]:
-    # 只有能讀取連結筆記的人，才能看到該筆記使用的標籤。
+    # 只有能讀取連結記事的人，才能看到該記事使用的標籤。
     linked = notebook_items(Note, user_id).join(note_tags, note_tags.c.note_id == Note.id)
     return or_(visible_to(Tag, user_id), Tag.id.in_(linked.with_only_columns(note_tags.c.tag_id)))

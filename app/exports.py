@@ -238,7 +238,7 @@ class WordWriter:
                 self.text_run(paragraph, element.tail, frozenset())
 
     def note(self, note: Note, heading_offset: int = 0) -> None:
-        # 舊筆記保持純文字換行，富文字匯出前重新淨化。
+        # 舊記事保持純文字換行，富文字匯出前重新淨化。
         if note.content_format != "html":
             self.document.add_paragraph(xml_text(note.content))
             return
@@ -247,7 +247,7 @@ class WordWriter:
 
 
 def word_response(writer: WordWriter, title: str) -> Response:
-    # 用 UTF-8 檔名下載，不將筆記名稱當成伺服器檔案路徑。
+    # 用 UTF-8 檔名下載，不將記事名稱當成伺服器檔案路徑。
     filename = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", title).strip(" .")[:120] or "PeipeiNote"
     buffer = BytesIO()
     writer.document.save(buffer)
@@ -258,23 +258,17 @@ def word_response(writer: WordWriter, title: str) -> Response:
 
 
 def notebook_outline(db: Session, notebook_id: int) -> list[Entry]:
-    # 一次讀取整本筆記本的三層內容，空的清單與主題仍列在目錄。
-    sections = list(db.scalars(select(TopicList).where(TopicList.notebook_id == notebook_id).order_by(TopicList.id)))
+    # 將既有主題直接列在筆記本目錄中，空主題也保留。
     topics = db.scalars(select(Topic).join(TopicList).where(TopicList.notebook_id == notebook_id).order_by(Topic.id))
     notes = db.scalars(select(Note).join(Topic).join(TopicList).where(TopicList.notebook_id == notebook_id).order_by(Note.id))
-    topics_by_section: dict[int, list[Topic]] = {}
     notes_by_topic: dict[int, list[Note]] = {}
-    for topic in topics:
-        topics_by_section.setdefault(topic.topic_list_id, []).append(topic)
     for note in notes:
         notes_by_topic.setdefault(note.topic_id, []).append(note)
     entries = []
-    for section in sections:
-        entries.append(Entry(section.name, 1))
-        for topic in topics_by_section.get(section.id, []):
-            entries.append(Entry(topic.name, 2))
-            for note in notes_by_topic.get(topic.id, []):
-                entries.append(Entry(note.title, 3, note))
+    for topic in topics:
+        entries.append(Entry(topic.name, 1))
+        for note in notes_by_topic.get(topic.id, []):
+            entries.append(Entry(note.title, 2, note))
     return entries
 
 
@@ -284,13 +278,13 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
 
     @router.get("/export/notes/{note_id}.docx")
     def export_note(request: Request, note_id: int) -> Response:
-        # 將單篇已儲存的筆記輸出成標準 Word 文件。
+        # 將單篇已儲存的記事輸出成標準 Word 文件。
         user_id = require_user(engine, settings, request)
         with Session(engine, expire_on_commit=False) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN")
             note = db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) if 0 < note_id < 2**63 else None
             if note is None:
-                raise HTTPException(404, "找不到這則筆記。")
+                raise HTTPException(404, "找不到這則記事。")
             paths = image_paths(db, [note], uploads, user_id)
         writer = WordWriter(paths)
         writer.document.add_heading(xml_text(note.title), 0)
@@ -324,7 +318,7 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
             heading = writer.document.add_heading(xml_text(entry.title), entry.level)
             add_bookmark(heading, number)
             if entry.note:
-                writer.note(entry.note, heading_offset=3)
+                writer.note(entry.note, heading_offset=2)
         return word_response(writer, notebook.name)
 
     @router.get("/print/notes/{note_id}")
@@ -334,7 +328,7 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
         with Session(engine) as db:
             note = db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) if 0 < note_id < 2**63 else None
             if note is None:
-                raise HTTPException(404, "找不到這則筆記。")
+                raise HTTPException(404, "找不到這則記事。")
             rich = note.content_format == "html"
             return templates.TemplateResponse(
                 request=request, name="print_note.html",

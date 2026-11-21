@@ -40,14 +40,14 @@ def test_login_logout_and_cookie(client: TestClient, credentials: dict[str, str]
     # 驗證登入表單、Cookie 安全屬性、登入後首頁與伺服器端登出。
     blocked = client.get("/", follow_redirects=False)
     assert (blocked.status_code, blocked.headers["location"]) == (303, "/login")
-    assert "已登入" not in blocked.text
+    assert 'action="/logout"' not in blocked.text
     assert 'name="password"' in client.get("/login").text
     response = client.post("/login", data=credentials, headers={"Origin": ORIGIN}, follow_redirects=False)
     assert response.status_code == 303
     cookie = response.headers["set-cookie"].lower()
     assert all(flag in cookie for flag in ("httponly", "secure", "samesite=lax", f"max-age={auth.COOKIE_SECONDS}"))
     token = client.cookies[auth.COOKIE]
-    assert "已登入" in client.get("/").text
+    assert 'action="/logout"' in client.get("/").text
     assert client.post("/logout", headers={"Origin": ORIGIN}, follow_redirects=False).status_code == 303
     client.cookies.set(auth.COOKIE, token)
     assert client.get("/", follow_redirects=False).status_code == 303
@@ -107,11 +107,11 @@ def test_session_expires_on_server(
     clock = SimpleNamespace(now=10_000)
     monkeypatch.setattr(auth, "time", SimpleNamespace(time=lambda: clock.now))
     client.post("/login", data=credentials, headers={"Origin": ORIGIN}).raise_for_status()
-    assert "已登入" in client.get("/").text
+    assert 'action="/logout"' in client.get("/").text
     clock.now += auth.COOKIE_SECONDS - 1
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 200
-    assert "已登入" in response.text
+    assert 'action="/logout"' in response.text
     assert "set-cookie" not in response.headers
     clock.now += 1
     assert client.get("/", follow_redirects=False).status_code == 303
@@ -158,14 +158,14 @@ def test_private_paths_are_not_exposed(client: TestClient, method: str, path: st
     assert client.request(method, path).status_code == 404
 
 def note_version(html: str) -> str:
-    # 像瀏覽器一樣使用頁面載入時拿到的筆記版本。
+    # 像瀏覽器一樣使用頁面載入時拿到的記事版本。
     match = re.search(r'name="version" value="([^"]+)"', html)
     assert match is not None
     return match[1]
 
 
 def open_test_note(client: TestClient, credentials: dict[str, str]) -> str:
-    # 登入並透過正式工作區建立測試筆記。
+    # 登入並透過正式工作區建立測試記事。
     submit(client, "/login", **credentials)
     return submit(client, "/workspace/note", name="原標題", use_inbox=1)
 
@@ -216,7 +216,7 @@ def test_two_tabs_keep_the_later_draft_on_version_conflict(
 def test_list_only_loads_a_100_character_summary_and_opens_full_note(
     client: TestClient, credentials: dict[str, str], tmp_path: Path,
 ) -> None:
-    # 中欄只顯示 100 個可見字元，選取筆記後右欄仍可讀完整正文。
+    # 中欄只顯示 100 個可見字元，選取記事後右欄仍可讀完整正文。
     url = open_test_note(client, credentials)
     with closing(sqlite3.connect(tmp_path / "test.db")) as database, database:
         database.execute("UPDATE notes SET updated_at = ?", ("2000-01-02 03:04:05",))
@@ -254,7 +254,7 @@ def test_backup_contains_a_consistent_snapshot_without_secrets(
 ) -> None:
     # 壓縮前讓另一請求移除附件，備份仍包含快照中對應的檔案。
     open_test_note(client, credentials)
-    submit(client, "/workspace/note/1/save", name="有備份", content="重要筆記")
+    submit(client, "/workspace/note/1/save", name="有備份", content="重要記事")
     origin = {"Origin": ORIGIN}
     uploaded = client.post("/api/notes/1/files", content="附件本文".encode(),
                            headers={**origin, "X-Filename": "document.txt"})
@@ -288,9 +288,9 @@ def test_backup_contains_a_consistent_snapshot_without_secrets(
         restored.write_bytes(archive.read("peipeinote.db"))
     with closing(sqlite3.connect(restored)) as database:
         assert database.execute("PRAGMA quick_check").fetchone() == ("ok",)
-        assert database.execute("SELECT title, content FROM notes").fetchone() == ("有備份", "重要筆記")
+        assert database.execute("SELECT title, content FROM notes").fetchone() == ("有備份", "重要記事")
         assert database.execute("SELECT storage_name FROM attachments").fetchone() == (file_id,)
-        assert database.execute("SELECT title FROM note_search WHERE note_search MATCH ?", ("重要筆",)).fetchone() == ("有備份",)
+        assert database.execute("SELECT title FROM note_search WHERE note_search MATCH ?", ("重要記事",)).fetchone() == ("有備份",)
     assert not list(uploads.glob(".backup-*"))
 
 
@@ -335,10 +335,15 @@ def test_workspace_creates_edits_moves_and_deletes_all_levels(
 ) -> None:
     # 從登入後的三欄介面建立四層資料，逐層改名、移動和刪除。
     submit(client, "/login", **credentials)
-    assert 'class="workspace"' in client.get("/").text
+    home = client.get("/").text
+    assert 'class="workspace workspace-wide"' in home
+    assert 'id="notes-heading"' not in home
+    header, _, workspace = home.partition("</header>")
+    assert 'action="/workspace/notebook"' in header and 'action="/workspace/notebook"' not in workspace
     names = ("第一本", "第二本")
     first_book = submit(client, "/workspace/notebook", name=names[0])
     second_book = submit(client, "/workspace/notebook", name=names[1])
+    assert 'id="notes-heading"' not in client.get(first_book).text
     submit(client, "/workspace/notebook/2/move", direction=-1)
     ordered = client.get("/").text
     assert ordered.index(names[1]) < ordered.index(names[0])
@@ -346,25 +351,31 @@ def test_workspace_creates_edits_moves_and_deletes_all_levels(
     assert "工作筆記本" in client.get(first_book).text
 
     section = submit(client, "/workspace/section", parent_id=1, name="工作清單")
+    section_html = client.get(section).text
+    assert 'id="notes-heading"' not in section_html
+    assert 'action="/workspace/topic"' in section_html.partition('aria-labelledby="editor-heading"')[2]
     other_section = submit(client, "/workspace/section", parent_id=2, name="其他清單")
     submit(client, "/workspace/section/1/save", name="專案清單")
     submit(client, "/workspace/section/1/move", target_id=2)
     section_page = client.get(section).text
-    assert "專案清單" in section_page and 'item_id=2" aria-current="page"' in client.get(second_book).text
+    assert 'id="editor-heading">第二本</h3>' in section_page
+    assert "專案清單" not in section_page and 'item_id=2" aria-current="page"' in client.get(second_book).text
     assert '<details open>' in section_page
 
     topic = submit(client, "/workspace/topic", parent_id=1, name="工作主題")
+    assert 'id="notes-heading"' in client.get(topic).text
     destination = submit(client, "/workspace/topic", parent_id=2, name="另一個主題")
     submit(client, "/workspace/topic/1/save", name="新主題")
     submit(client, "/workspace/topic/1/move", target_id=2)
     assert "新主題" in client.get(topic).text
 
-    note = submit(client, "/workspace/note", parent_id=1, name="我的筆記")
-    title = "O'Reilly & 研究筆記"
+    note = submit(client, "/workspace/note", parent_id=1, name="我的記事")
+    title = "O'Reilly & 研究記事"
     body = "\n測試 <標記> 與引號\n第二行"
     submit(client, "/workspace/note/1/save", name=title, content=body)
     editor = client.get(note).text
-    assert "O&#39;Reilly &amp; 研究筆記" in editor
+    assert 'id="notes-heading"' in editor
+    assert "O&#39;Reilly &amp; 研究記事" in editor
     assert "\n測試 &lt;標記&gt; 與引號\n第二行" in editor
     assert 'action="/workspace/note/1/save"' in editor
     assert 'action="/logout"' in editor
@@ -379,7 +390,7 @@ def test_workspace_creates_edits_moves_and_deletes_all_levels(
     assert submit(client, "/workspace/section/1/delete", confirmed="true") == second_book
     assert submit(client, "/workspace/notebook/1/delete", confirmed="true") == "/"
     assert submit(client, "/workspace/notebook/2/delete", confirmed="true") == "/"
-    assert "先從左欄新增一本筆記本" in client.get("/").text
+    assert "從右上方新增第一本筆記本" in client.get("/").text
 
 
 def test_workspace_guards_mutations_and_preserves_children(
@@ -391,6 +402,7 @@ def test_workspace_guards_mutations_and_preserves_children(
     assert client.post("/workspace/notebook", data={"name": "跨站"}, headers={"Origin": "https://elsewhere.test"}).status_code == 403
     book = submit(client, "/workspace/notebook", name="原有筆記本")
     submit(client, "/workspace/section", name="要保留的清單", parent_id=1)
+    submit(client, "/workspace/topic", name="要保留的主題", notebook_id=1)
     for action, data in [
         ("save", {"name": "新名稱"}), ("move", {"direction": "1"}), ("delete", {"confirmed": "true"}),
     ]:
@@ -401,8 +413,30 @@ def test_workspace_guards_mutations_and_preserves_children(
     assert client.post("/workspace/topic", headers=headers, data={"name": "孤立主題", "parent_id": 250}).status_code == 404
     assert client.post("/workspace/section/1/move", headers=headers, data={"target_id": 250}).status_code == 404
     result = client.get(book).text
-    assert "原有筆記本" in result and "要保留的清單" in result
+    assert "原有筆記本" in result and "要保留的主題" in result
     assert "跨站" not in result
+
+
+def test_topics_are_created_and_moved_directly_by_notebook(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 新介面以筆記本建立與移動主題，保留不同舊清單中的主題。
+    submit(client, "/login", **credentials)
+    first = submit(client, "/workspace/notebook", name="來源筆記本")
+    second = submit(client, "/workspace/notebook", name="目的筆記本")
+    submit(client, "/workspace/section", parent_id=1, name="舊版隱藏分類")
+    submit(client, "/workspace/topic", parent_id=1, name="原有主題")
+    submit(client, "/workspace/section", parent_id=1, name="第二個隱藏分類")
+    submit(client, "/workspace/topic", parent_id=2, name="另一個原有主題")
+    topic = submit(client, "/workspace/topic", notebook_id=1, name="新增的主題")
+    first_html = client.get(first).text
+    assert "原有主題" in first_html and "新增的主題" in first_html
+    assert "另一個原有主題" in first_html and "第二個隱藏分類" not in first_html
+    assert "舊版隱藏分類" not in first_html and "kind=section" not in first_html
+    assert 'select name="notebook_id"' in client.get(topic).text
+    assert submit(client, "/workspace/topic/3/move", notebook_id=2) == topic
+    assert "新增的主題" in client.get(second).text
+    assert 'id="editor-heading">新增的主題</h3>' in client.get(topic).text
 
 
 def test_confirmed_notebook_removal_deletes_its_tree_and_files(
@@ -410,7 +444,7 @@ def test_confirmed_notebook_removal_deletes_its_tree_and_files(
 ) -> None:
     # 一般確認保留原資料。第二個確認才會一併移除附件、標籤關聯及搜尋結果。
     open_test_note(client, credentials)
-    submit(client, "/workspace/note/1/save", name="待刪筆記", content="整本刪除關鍵詞")
+    submit(client, "/workspace/note/1/save", name="待刪記事", content="整本刪除關鍵詞")
     submit(client, "/library/tags", name="保留標籤")
     submit(client, "/library/notes/1/tags", tag_id=1, action="add")
     uploaded = client.post(
@@ -428,7 +462,7 @@ def test_confirmed_notebook_removal_deletes_its_tree_and_files(
     assert client.get("/?kind=note&item_id=1").status_code == 404
     assert client.get(file_info["url"]).status_code == 404
     assert not (tmp_path / "uploads" / file_info["id"]).exists()
-    assert "待刪筆記" not in client.get("/library/search", params={"q": "整本刪除關鍵詞"}).text
+    assert "待刪記事" not in client.get("/library/search", params={"q": "整本刪除關鍵詞"}).text
     assert "保留標籤" in client.get("/library/tags").text
     assert "另一本" in client.get("/").text
     with closing(sqlite3.connect(tmp_path / "test.db")) as database:
@@ -476,7 +510,7 @@ def test_private_attachments_lifecycle(
     submit(client, "/workspace/notebook", name="附件")
     submit(client, "/workspace/section", parent_id=1, name="清單")
     submit(client, "/workspace/topic", parent_id=1, name="主題")
-    note = submit(client, "/workspace/note", parent_id=1, name="筆記")
+    note = submit(client, "/workspace/note", parent_id=1, name="記事")
     upload = "/api/notes/1/files"
     headers = {"Origin": ORIGIN}
     fake = client.post(upload, content=b"plain text", headers={**headers, "X-Filename": quote("假.pdf")})
@@ -530,13 +564,13 @@ def test_private_attachments_lifecycle(
     assert client.get(pdf_url).headers["content-disposition"].startswith("attachment")
     assert "手冊.pdf" in client.get(note).text
 
-    submit(client, "/workspace/note/1/save", name="筆記", content_format="html",
+    submit(client, "/workspace/note/1/save", name="記事", content_format="html",
            content=f'<img src="{picture_url}" alt="圖片"><img src="https://example.com/a.png">')
     markup = client.get(note).text
     assert f'src=&#34;{picture_url}' in markup
     assert "https://example.com/a.png" not in markup
     assert client.post(picture_url + "/delete", headers=headers).status_code == 409
-    submit(client, "/workspace/note/1/save", name="筆記", content_format="html", content="<p>更新</p>")
+    submit(client, "/workspace/note/1/save", name="記事", content_format="html", content="<p>更新</p>")
     assert submit(client, picture_url + "/delete") == note
     assert client.get(picture_url).status_code == 404
     assert not (tmp_path / "uploads" / info["id"]).exists()
@@ -574,7 +608,7 @@ def test_search_tags_and_template_workflow(client: TestClient, credentials: dict
     assert "內嵌圖片和附件不會複製" in client.get(note).text
     assert client.post("/workspace/note", data={"parent_id": 1, "name": "錯誤", "template_id": 99}, headers=headers).status_code == 404
     submit(client, "/workspace/note", parent_id=2, name="假期準備", template_id="")
-    submit(client, "/workspace/note/2/save", name="假期準備", content='行前筆記：搭飛機到北海道。查找 "登機門"。')
+    submit(client, "/workspace/note/2/save", name="假期準備", content='行前記事：搭飛機到北海道。查找 "登機門"。')
     for _ in range(2):
         submit(client, "/library/notes/1/tags", action="add", tag_id=1)
     submit(client, "/library/notes/1/tags", action="add", tag_id=2)
@@ -616,7 +650,7 @@ def test_export_word_and_print(client: TestClient, credentials: dict[str, str]) 
     assert client.get("/export/notebooks/1.docx").status_code == 401
     assert client.get("/print/notes/1").status_code == 401
     submit(client, "/login", **credentials)
-    submit(client, "/workspace/notebook", name="工作筆記")
+    submit(client, "/workspace/notebook", name="工作記事")
     submit(client, "/workspace/section", parent_id=1, name="專案清單")
     submit(client, "/workspace/topic", parent_id=1, name="例會主題")
     note_url = submit(client, "/workspace/note", parent_id=1, name="週五會議")
@@ -658,12 +692,13 @@ def test_export_word_and_print(client: TestClient, credentials: dict[str, str]) 
     book = client.get("/export/notebooks/1.docx")
     assert book.status_code == 200
     combined = Document(BytesIO(book.content))
-    for level, title in [(1, "專案清單"), (2, "例會主題"), (3, "週五會議")]:
+    for level, title in [(1, "例會主題"), (2, "週五會議")]:
         assert any(p.text == title and p.style.name == f"Heading {level}" for p in combined.paragraphs)
     assert any("舊純文字 <保留>\n下一行" == p.text for p in combined.paragraphs)
     with ZipFile(BytesIO(book.content)) as package:
         xml = package.read("word/document.xml").decode()
-        assert 'w:anchor="outline_3"' in xml and 'w:name="outline_3"' in xml
+        assert 'w:anchor="outline_2"' in xml and 'w:name="outline_2"' in xml
+        assert "專案清單" not in xml
     page = client.get("/print/notes/1")
     assert page.status_code == 200 and page.headers["cache-control"] == "private, no-store"
     assert "<table>" in page.text and f'src="{image_url}"' in page.text
@@ -678,7 +713,7 @@ def test_home_quick_create_supports_first_note_and_existing_topics(
     # 從首頁開啟新增表單，並確認收件匣及選擇主題兩條流程。
     submit(client, "/login", **credentials)
     home = client.get("/").text
-    assert 'href="/?new_note=true#quick-note">新增筆記</a>' in home
+    assert 'href="/?new_note=true#quick-note">新增記事</a>' in home
     assert 'id="quick-note"' not in home
     quick = client.get("/?new_note=true").text
     assert 'id="quick-note"' in quick and 'name="use_inbox"' in quick
@@ -689,9 +724,9 @@ def test_home_quick_create_supports_first_note_and_existing_topics(
     submit(client, "/workspace/section", parent_id=2, name="任務")
     submit(client, "/workspace/topic", parent_id=2, name="例會")
     quick = client.get("/?new_note=true").text
-    assert "收件匣 / 一般 / 隨手記" in quick and "工作 / 任務 / 例會" in quick
+    assert "收件匣 / 隨手記" in quick and "工作 / 例會" in quick
     assert 'name="use_inbox"' not in quick
-    second = submit(client, "/workspace/note", name="會議筆記", parent_id=2)
-    assert "會議筆記" in client.get(second).text
-    assert "會議筆記" in client.get("/?kind=topic&item_id=2").text
-    assert "會議筆記" not in client.get("/?kind=topic&item_id=1").text
+    second = submit(client, "/workspace/note", name="會議記事", parent_id=2)
+    assert "會議記事" in client.get(second).text
+    assert "會議記事" in client.get("/?kind=topic&item_id=2").text
+    assert "會議記事" not in client.get("/?kind=topic&item_id=1").text

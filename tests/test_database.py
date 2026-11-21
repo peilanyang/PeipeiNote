@@ -9,7 +9,7 @@ from app.database import Note, Notebook, Tag, Topic, TopicList, initialize_house
 
 
 def test_database_schema_and_foreign_keys(tmp_path: Path) -> None:
-    # 建立四層結構，驗證標籤關聯與 SQLite 對孤兒筆記的攔截。
+    # 建立四層結構，驗證標籤關聯與 SQLite 對孤兒記事的攔截。
     engine = make_engine(tmp_path / "test.db")
     try:
         initialize_household(engine)

@@ -55,7 +55,7 @@ LEVELS = {
     Kind.notebook: Level(Notebook, "筆記本"),
     Kind.section: Level(TopicList, "主題清單", Kind.notebook, "notebook_id"),
     Kind.topic: Level(Topic, "主題", Kind.section, "topic_list_id"),
-    Kind.note: Level(Note, "筆記", Kind.topic, "topic_id"),
+    Kind.note: Level(Note, "記事", Kind.topic, "topic_id"),
 }
 CHILD = {level.parent: kind for kind, level in LEVELS.items()}
 
@@ -94,7 +94,8 @@ def title_path(item: Item, kind: Kind, items: dict[Kind, dict[int, Item]]) -> st
         level = LEVELS[kind]
         parent = level.parent
         item = items[parent][getattr(item, level.parent_key)]
-        names.append(item.name)
+        if parent != Kind.section:
+            names.append(item.name)
         kind = parent
     return " / ".join(reversed(names))
 
@@ -102,10 +103,14 @@ def title_path(item: Item, kind: Kind, items: dict[Kind, dict[int, Item]]) -> st
 def render_workspace(
     request: Request, engine: Engine, user_id: int, kind: Kind | None, item_id: int | None, new_note: bool = False,
 ) -> Response:
-    # 左欄讀取階層，中欄只查詢目前主題的筆記，右欄載入選取的項目。
+    # 左欄讀取階層，中欄只查詢目前主題的記事，右欄載入選取的項目。
     with Session(engine) as db, db.begin():
         db.connection().exec_driver_sql("BEGIN")
         selection = get_item(db, kind, item_id, user_id) if kind is not None and item_id is not None else None
+        if isinstance(selection, TopicList):
+            # 舊主題清單連結改顯示所屬筆記本，仍先確認原項目的存取權。
+            selection = get_item(db, Kind.notebook, selection.notebook_id, user_id)
+            kind = Kind.notebook
         books = notebook_order(db, user_id)
         own_books = [book for book in books if book.owner_id == user_id]
         sections = list(db.scalars(notebook_items(TopicList, user_id).order_by(TopicList.id)))
@@ -115,6 +120,10 @@ def render_workspace(
             Kind.section: {row.id: row for row in sections},
             Kind.topic: {row.id: row for row in topics},
         }
+        topics_by_book: dict[int, list[Topic]] = {}
+        for topic in topics:
+            notebook_id = items[Kind.section][topic.topic_list_id].notebook_id
+            topics_by_book.setdefault(notebook_id, []).append(topic)
         active = {}
         ancestor = selection
         ancestor_kind = kind
@@ -136,7 +145,11 @@ def render_workspace(
         ).all() if topic_id else []
         parent = LEVELS[kind].parent if kind is not None else None
         destinations = []
-        if parent is not None:
+        if kind == Kind.topic:
+            # 主題的移動目的地以筆記本顯示，跨本移動只提供自己的筆記本。
+            if owns_notebook:
+                destinations = [(book.id, book.name) for book in own_books if book.id != active_book.id]
+        elif parent is not None:
             allowed = notebook_items(LEVELS[parent].model, user_id).where(or_(
                 Notebook.id == active_book.id,
                 Notebook.owner_id == user_id if owns_notebook else False,
@@ -146,7 +159,6 @@ def render_workspace(
                 for row in db.scalars(allowed)
                 if row.id != active.get(parent.value)
             ]
-        child = CHILD.get(kind)
         tags = list(db.scalars(select(Tag).where(visible_to(Tag, user_id)).order_by(Tag.name)))
         assigned_tags = []
         if isinstance(selection, Note):
@@ -158,8 +170,7 @@ def render_workspace(
             request=request,
             name="workspace.html",
             context={
-                "books": books, "sections_by_book": group_by(sections, "notebook_id"),
-                "topics_by_section": group_by(topics, "topic_list_id"), "notes": notes,
+                "books": books, "topics_by_book": topics_by_book, "notes": notes,
                 "active": active, "current_topic": items[Kind.topic].get(topic_id),
                 "quick_create": new_note and selection is None,
                 "quick_topics": [(row.id, title_path(row, Kind.topic, items)) for row in topics]
@@ -179,7 +190,6 @@ def render_workspace(
                 "editor_content": editor_source(selection.content, selection.content_format)
                 if isinstance(selection, Note) else "",
                 "label": LEVELS[kind].label if kind else None,
-                "child_kind": child.value if child else None, "child_label": LEVELS[child].label if child else None,
                 "destinations": destinations,
                 "has_children": selection is not None and kind is not None and has_children(db, kind, selection.id),
                 "can_raise": bool(owns_notebook and kind == Kind.notebook and own_books[0].id != selection.id),
@@ -189,14 +199,6 @@ def render_workspace(
         )
 
 
-def group_by(rows: list[TopicList] | list[Topic], key: str) -> dict[int, list[TopicList | Topic]]:
-    # 將同一父層底下的項目聚在一起，供樹狀導覽使用。
-    grouped: dict[int, list[TopicList | Topic]] = {}
-    for row in rows:
-        grouped.setdefault(getattr(row, key), []).append(row)
-    return grouped
-
-
 def save_fields(item: Item, name: str, content: str, content_format: NoteFormat = "plain") -> None:
     # 純文字原樣儲存，富文字先經過 HTML 允許清單淨化。
     name = name.strip()
@@ -204,7 +206,7 @@ def save_fields(item: Item, name: str, content: str, content_format: NoteFormat 
         raise HTTPException(422, "名稱須為 1 至 200 個字元。")
     if isinstance(item, Note):
         if len(content) > CONTENT_LIMIT:
-            raise HTTPException(422, "筆記超過 100,000 個字元。")
+            raise HTTPException(422, "記事超過 100,000 個字元。")
         item.title = name
         item.content = clean_html(content) if content_format == "html" else content
         item.content_format = content_format
@@ -227,7 +229,9 @@ def move_notebook(db: Session, item_id: int, direction: int, user_id: int) -> No
 def has_children(db: Session, kind: Kind, item_id: int) -> bool:
     # 保護下層資料，有子項目或附件時必須先移走或清空。
     child_kind = CHILD.get(kind)
-    if child_kind is not None:
+    if kind == Kind.notebook:
+        existing = db.scalar(select(Topic.id).join(TopicList).where(TopicList.notebook_id == item_id).limit(1))
+    elif child_kind is not None:
         child = LEVELS[child_kind]
         model = child.model
         existing = db.scalar(select(model.id).where(getattr(model, child.parent_key) == item_id).limit(1))
@@ -241,7 +245,7 @@ def remove_item(db: Session, kind: Kind, item: Item, delete_descendants: bool) -
     if not delete_descendants and has_children(db, kind, item.id):
         raise HTTPException(409, "此項目仍有下層資料或附件，請重新開啟頁面並確認是否一併刪除。")
 
-    # 沿外鍵取得子樹，在同一筆交易由附件、筆記、主題到上層依序刪除。
+    # 沿外鍵取得子樹，在同一筆交易由附件、記事、主題到上層依序刪除。
     levels: list[tuple[type[Notebook] | type[TopicList] | type[Topic] | type[Note], Select[tuple[int]]]] = []
     model = LEVELS[kind].model
     ids = select(model.id).where(model.id == item.id)
@@ -256,7 +260,7 @@ def remove_item(db: Session, kind: Kind, item: Item, delete_descendants: bool) -
 
     attachments = list(db.scalars(select(Attachment.storage_name).where(Attachment.note_id.in_(ids))))
     db.execute(delete(Attachment).where(Attachment.note_id.in_(ids)))
-    # 舊版資料庫的關聯表可能沒有筆記刪除串聯規則。
+    # 舊版資料庫的關聯表可能沒有記事刪除串聯規則。
     db.execute(delete(note_tags).where(note_tags.c.note_id.in_(ids)))
     for model, ids in reversed(levels):
         db.execute(delete(model).where(model.id.in_(ids)).execution_options(synchronize_session=False))
@@ -264,7 +268,7 @@ def remove_item(db: Session, kind: Kind, item: Item, delete_descendants: bool) -
 
 
 def inbox_topic(db: Session, user_id: int) -> int:
-    # 在同一筆交易建立或重用首則筆記的收件匣，避免重複建立。
+    # 在同一筆交易建立或重用首則記事的收件匣，避免重複建立。
     book = db.scalar(select(Notebook).where(Notebook.name == "收件匣", Notebook.owner_id == user_id, Notebook.is_shared.is_(False)).order_by(Notebook.id).limit(1))
     if book is None:
         book = Notebook(name="收件匣", owner_id=user_id)
@@ -287,6 +291,20 @@ def inbox_topic(db: Session, user_id: int) -> int:
     return topic.id
 
 
+def topic_list_for_book(db: Session, notebook_id: int, user_id: int) -> int:
+    # 保留現有資料庫結構，從已驗權的筆記本取得或建立主題用的內部容器。
+    get_item(db, Kind.notebook, notebook_id, user_id)
+    section_id = db.scalar(select(TopicList.id).where(
+        TopicList.notebook_id == notebook_id,
+    ).order_by(TopicList.id).limit(1))
+    if section_id is not None:
+        return section_id
+    section = TopicList(notebook_id=notebook_id, name="一般")
+    db.add(section)
+    db.flush()
+    return section.id
+
+
 def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> APIRouter:
     # 所有資料變更共用登入驗證與同源檢查。
     router = APIRouter(prefix="/workspace")
@@ -297,6 +315,7 @@ def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> 
         kind: Kind,
         name: Annotated[str, Form()],
         parent_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
+        notebook_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         template_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         use_inbox: Annotated[bool, Form()] = False,
     ) -> RedirectResponse:
@@ -309,8 +328,12 @@ def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> 
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             if use_inbox:
                 if kind != Kind.note or parent_id is not None:
-                    raise HTTPException(422, "收件匣只能用於沒有指定主題的新筆記。")
+                    raise HTTPException(422, "收件匣只能用於沒有指定主題的新記事。")
                 parent_id = inbox_topic(db, user_id)
+            if notebook_id is not None:
+                if kind != Kind.topic or parent_id is not None:
+                    raise HTTPException(422, "指定筆記本的欄位僅適用於新增主題。")
+                parent_id = topic_list_for_book(db, notebook_id, user_id)
             if level.parent is not None:
                 if parent_id is None:
                     raise HTTPException(422, "請先選擇上層項目。")
@@ -322,7 +345,7 @@ def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> 
                 item.owner_id = user_id
             if template_id is not None:
                 if not isinstance(item, Note):
-                    raise HTTPException(422, "範本只能套用至筆記。")
+                    raise HTTPException(422, "範本只能套用至記事。")
                 template = db.scalar(select(Template).where(Template.id == template_id, visible_to(Template, user_id)))
                 if template is None:
                     raise HTTPException(404, "找不到這個範本。")
@@ -343,6 +366,7 @@ def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> 
         content_format: Annotated[NoteFormat, Form()] = "plain",
         version: Annotated[str | None, Form(max_length=32)] = None,
         target_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
+        notebook_id: Annotated[int | None, Form(gt=0, le=MAX_ID)] = None,
         direction: Annotated[int, Form(ge=-1, le=1)] = 0,
         confirmed: Annotated[bool, Form()] = False,
         delete_descendants: Annotated[bool, Form()] = False,
@@ -365,10 +389,10 @@ def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> 
             elif action == Action.save:
                 if isinstance(item, Note):
                     if version is None:
-                        raise HTTPException(422, "缺少筆記版本。請重新開啟筆記。")
+                        raise HTTPException(422, "缺少記事版本。請重新開啟記事。")
                     if item.version != version:
                         if request.headers.get("accept") == "application/json":
-                            raise HTTPException(409, "這則筆記已有新版。你的草稿仍在此分頁。")
+                            raise HTTPException(409, "這則記事已有新版。你的草稿仍在此分頁。")
                         return templates.TemplateResponse(
                             request=request, name="note_conflict.html", status_code=409,
                             context={"note_url": item_url(kind, item_id), "title": name, "draft": content},
@@ -380,6 +404,10 @@ def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> 
                 if level.parent is None:
                     move_notebook(db, item_id, direction, user_id)
                 else:
+                    if notebook_id is not None:
+                        if kind != Kind.topic or target_id is not None:
+                            raise HTTPException(422, "指定筆記本的欄位僅適用於移動主題。")
+                        target_id = topic_list_for_book(db, notebook_id, user_id)
                     if target_id is None:
                         raise HTTPException(422, "請選擇移動目的地。")
                     get_item(db, level.parent, target_id, user_id)

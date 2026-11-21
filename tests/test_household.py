@@ -44,11 +44,11 @@ def family(tmp_path: Path, accounts: tuple[auth.Settings, dict[str, str], dict[s
 
 
 def create_hierarchy(client: TestClient, prefix: str) -> tuple[int, int, int, int]:
-    # 透過正式工作區建立完整四層筆記。
+    # 透過正式工作區建立完整四層記事。
     book = int(submit(client, "/workspace/notebook", name=f"{prefix}筆記本").split("=")[-1])
     section = int(submit(client, "/workspace/section", name=f"{prefix}清單", parent_id=book).split("=")[-1])
     topic = int(submit(client, "/workspace/topic", name=f"{prefix}主題", parent_id=section).split("=")[-1])
-    note = int(submit(client, "/workspace/note", name=f"{prefix}筆記", parent_id=topic).split("=")[-1])
+    note = int(submit(client, "/workspace/note", name=f"{prefix}記事", parent_id=topic).split("=")[-1])
     return book, section, topic, note
 
 
@@ -57,7 +57,7 @@ def test_private_notebook_and_library_are_isolated(family: tuple[TestClient, Tes
     a, b = family
     a_book, a_section, a_topic, a_note = create_hierarchy(a, "甲的記錄")
     book, section, topic, note = create_hierarchy(b, "乙的機密")
-    submit(b, f"/workspace/note/{note}/save", name="乙的機密筆記", content="私密關鍵詞")
+    submit(b, f"/workspace/note/{note}/save", name="乙的機密記事", content="私密關鍵詞")
     tag = int(submit(b, "/library/tags", name="乙的機密標籤").split("=")[-1])
     template = int(submit(b, "/library/templates", name="乙的機密範本", content="保密文字").split("=")[-1])
     submit(b, f"/library/notes/{note}/tags", tag_id=tag, action="add")
@@ -75,6 +75,12 @@ def test_private_notebook_and_library_are_isolated(family: tuple[TestClient, Tes
         assert a.post(f"/workspace/{kind}", headers=HEADERS, data={
             "name": "不可新增", "parent_id": private_parent,
         }).status_code == 404
+    assert a.post("/workspace/topic", headers=HEADERS, data={
+        "name": "不可新增", "notebook_id": book,
+    }).status_code == 404
+    assert a.post(f"/workspace/topic/{a_topic}/move", headers=HEADERS, data={
+        "notebook_id": book,
+    }).status_code == 404
     for path in (
         f"/export/notebooks/{book}.docx", f"/export/notes/{note}.docx", f"/print/notes/{note}",
         f"/library/search?q=機密&book={book}", f"/library/search?tag={tag}",
@@ -85,7 +91,7 @@ def test_private_notebook_and_library_are_isolated(family: tuple[TestClient, Tes
                  "/library/tags", "/library/templates"):
         response = a.get(path)
         assert response.status_code == 200 and "乙的機密" not in response.text
-    assert "乙的機密筆記" in b.get("/library/search?q=私密關鍵詞").text
+    assert "乙的機密記事" in b.get("/library/search?q=私密關鍵詞").text
     for kind, record in (("tags", tag), ("templates", template)):
         for action in ("save", "delete"):
             assert a.post(f"/library/{kind}", headers=HEADERS, data={
@@ -161,7 +167,7 @@ def test_sharing_grants_and_revokes_content_and_attachment_access(family: tuple[
     assert f'<option value="{own_tag}">甲的標籤</option>' in shared_note
     submit(a, f"/library/notes/{note}/tags", tag_id=own_tag, action="add")
     tagged = a.get(f"/library/search?tag={tag}")
-    assert tagged.status_code == 200 and "乙的待共享筆記" in tagged.text
+    assert tagged.status_code == 200 and "乙的待共享記事" in tagged.text
     assert "乙的另一個私人" not in tagged.text
     assert a.get(f"/library/tags?selected={tag}").status_code == 404
 
@@ -267,7 +273,7 @@ def test_legacy_database_preserves_notes_tags_templates_and_files(
             INSERT INTO notebooks VALUES (10, '舊筆記本');
             INSERT INTO topic_lists VALUES (20, 10, '舊清單');
             INSERT INTO topics VALUES (30, 20, '舊主題');
-            INSERT INTO notes VALUES (40, 30, '舊筆記', '原有內文');
+            INSERT INTO notes VALUES (40, 30, '舊記事', '原有內文');
             INSERT INTO tags VALUES (50, '原有標籤');
             INSERT INTO note_tags VALUES (40, 50);
             INSERT INTO templates VALUES (60, '原有範本', '原有版型');
@@ -289,7 +295,7 @@ def test_legacy_database_preserves_notes_tags_templates_and_files(
                 assert "原有內文" in note.text and "原有標籤" in note.text
                 assert "更新時間未知" in note.text
                 assert browser.get(f"/api/files/{file_id}").content == b"old"
-                assert "舊筆記" in browser.get("/library/search?q=原有內文").text
+                assert "舊記事" in browser.get("/library/search?q=原有內文").text
                 assert "原有版型" in browser.get("/library/templates?selected=60").text
             else:
                 assert browser.get(f"/api/files/{file_id}").status_code == 404
@@ -333,7 +339,7 @@ def test_web_backup_stays_disabled_after_partner_is_removed(
 def test_legacy_inactive_partner_slot_cannot_be_reassigned(
     tmp_path: Path, accounts: tuple[auth.Settings, dict[str, str], dict[str, str]],
 ) -> None:
-    # 舊資料只有帳號槽位且已停用時，保留私人筆記並拒絕自動重綁。
+    # 舊資料只有帳號槽位且已停用時，保留私人記事並拒絕自動重綁。
     database = tmp_path / "legacy-family.db"
     settings, primary, partner = accounts
     with TestClient(create_app(settings, database), base_url=ORIGIN) as browser:

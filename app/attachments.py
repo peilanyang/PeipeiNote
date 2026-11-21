@@ -125,7 +125,7 @@ def store_attachment(
         with Session(engine) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             if db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) is None:
-                raise HTTPException(404, "找不到這則筆記。")
+                raise HTTPException(404, "找不到這則記事。")
             uploads.mkdir(parents=True, exist_ok=True)
             with path.open("xb") as output:
                 created = True
@@ -170,13 +170,13 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
         # 驗證後才以串流讀取，超過單檔上限即拒絕。
         user_id = await run_in_threadpool(require_user, engine, settings, request, write=True)
         if not 0 < note_id < 2**63:
-            raise HTTPException(404, "找不到這則筆記。")
+            raise HTTPException(404, "找不到這則記事。")
         # 先查權限再接收資料，真正寫檔前在交易中重查。
         def check_note() -> None:
-            # 上傳之前只確認筆記存在且屬於目前帳號可用的筆記本。
+            # 上傳之前只確認記事存在且屬於目前帳號可用的筆記本。
             with Session(engine) as db:
                 if db.scalar(notebook_items(Note, user_id).where(Note.id == note_id)) is None:
-                    raise HTTPException(404, "找不到這則筆記。")
+                    raise HTTPException(404, "找不到這則記事。")
 
         await run_in_threadpool(check_note)
         encoded_name = request.headers.get("x-filename", "")
@@ -221,7 +221,7 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
             note = db.scalar(notebook_items(Note, user_id).where(Note.id == file.note_id))
             note_id = file.note_id
             if note and note.content_format == "html" and f'src="/api/files/{file_id}"' in note.content:
-                raise HTTPException(409, "請先從正文移除這張圖片並儲存筆記。")
+                raise HTTPException(409, "請先從正文移除這張圖片並儲存記事。")
             db.delete(file)
         remove_stored_attachment(uploads, file_id)
         return RedirectResponse(f"/?kind=note&item_id={note_id}", status_code=303)

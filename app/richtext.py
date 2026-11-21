@@ -51,7 +51,7 @@ template_cleaner = Cleaner(tags=ALLOWED_TAGS - {"img"}, **CLEAN_OPTIONS)
 
 
 def template_html(content: str) -> str:
-    # 範本保存排版，避免引用只屬於原筆記的圖片。
+    # 範本保存排版，避免引用只屬於原記事的圖片。
     return template_cleaner.clean(content)
 
 
@@ -61,7 +61,7 @@ def clean_html(content: str) -> str:
 
 
 def editor_source(content: str, stored_format: NoteFormat) -> str:
-    # 載入 HTML 時再淨化一次。舊筆記保留原本的純文字。
+    # 載入 HTML 時再淨化一次。舊記事保留原本的純文字。
     return clean_html(content) if stored_format == "html" else content
 
 
@@ -79,5 +79,5 @@ def update_note_schema(engine: Engine) -> None:
                 "ALTER TABLE notes ADD COLUMN version VARCHAR NOT NULL DEFAULT 'legacy'"
             )
         if "updated_at" not in columns:
-            # 舊筆記沒有可靠的歷史時間，保留空值直到第一次更新。
+            # 舊記事沒有可靠的歷史時間，保留空值直到第一次更新。
             connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN updated_at DATETIME")

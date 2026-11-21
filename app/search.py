@@ -42,7 +42,7 @@ def note_text(content: str, content_format: str) -> str:
 
 
 def initialize_search(engine: Engine) -> None:
-    # 以同一交易回填舊筆記，後續新增、編輯和刪除由資料庫觸發器維護。
+    # 以同一交易回填舊記事，後續新增、編輯和刪除由資料庫觸發器維護。
     with engine.begin() as conn:
         conn.exec_driver_sql("BEGIN IMMEDIATE")
         if not any(col["name"] == "content_format" for col in inspect(conn).get_columns("templates")):
