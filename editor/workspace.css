@@ -40,10 +40,9 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .management-links .heading:last-child { margin-top: .75rem; }
 .management-links .tree { margin-block: .35rem; }
 summary { cursor: pointer; overflow-wrap: anywhere; }
-.tree summary, .tree .leaf, .list a { padding: .34rem .45rem; border-radius: 7px; }
+.tree summary, .tree .leaf, .list a { border-radius: 7px; }
 .tree .leaf, .list a { display: block; }
 [aria-current=page] { font-weight: 650; color: var(--green); background: var(--pale); border-radius: 5px; }
-.tree a[aria-current=page] { padding: .1rem .25rem; }
 .list li + li { margin-top: .3rem; }
 .rule { border-top: 1px solid var(--line); margin-top: 1.15rem; padding-top: 1rem; }
 .stack { @apply tw:grid; gap: .65rem; justify-items: start; }
@@ -104,8 +103,9 @@ header { min-height: 62px; padding: .55rem 1.25rem; background: #fdfbff; }
 .notes { background: #fcfaff; }
 .editor { padding-inline: clamp(1rem, 3vw, 3rem); }
 .panel h2.heading { font-size: 1.06rem; }
-.tree summary, .tree .leaf { padding: .38rem .42rem; }
-.tree a[aria-current=page] { padding: .2rem .34rem; }
+#books-heading { margin-bottom: .5rem; }
+.tree summary, .tree .leaf { min-height: 28px; padding: .25rem .42rem; line-height: 1.35; }
+.tree summary a[aria-current=page] { padding-inline: .34rem; }
 .list a { padding: .78rem .7rem; border-radius: 8px; }
 .list li + li { border-top: 1px solid var(--line); margin-top: .2rem; padding-top: .2rem; }
 .list a:hover { background: var(--bar); text-decoration: none; }
