@@ -9,7 +9,7 @@
 | 層級 | 項目數 | 狀態 |
 |------|--------|------|
 | **P0 立即修復（資安/嚴重邏輯）** | 1 | ✅ 完成 |
-| **P1 核心效能/資料完整性** | 3 | ✅ 1 完成 / ☐ 2 待辦 / ☐ 3 待辦 |
+| **P1 核心效能/資料完整性** | 3 | ✅ 2 完成 / ☐ 3 待辦 |
 | **P2 使用體驗明顯改善** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P3 細節打磨** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P4 架構評估/重構** | 1 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
@@ -47,14 +47,18 @@
   3. `pytest tests/test_main.py::test_workspace_creates_edits_moves_and_deletes_all_levels` 通過 ✅
   4. 功能測試：建立/移動/刪除四層項目皆正常 ✅
 
-### P1-2 `Notebook` 新增 `UniqueConstraint(owner_id, name)`（防並發建立重複收件匣）
+### P1-2 `Notebook` 新增 `UniqueConstraint(owner_id, name)`（防並發建立重複收件匣） ✅
 - **現況**：`inbox_topic()` 先查後建，極短窗口可能並發建立同名筆記本
-- **修正位置**：`app/database.py` `Notebook` 類別加入 `__table_args__ = (UniqueConstraint("owner_id", "name", name="uq_notebook_owner_name"),)`
-- **遷移**：`initialize_household()` 中檢查並補上 constraint（SQLite 需重建表，步驟 2 已有遷移邏輯可複用）
+- **修正位置**：
+  - `app/database.py:32` `Notebook` 類別已有 `__table_args__ = (UniqueConstraint("owner_id", "name", name="uq_notebook_owner_name"),)`
+  - `app/database.py:177-188` `initialize_household()` 遷移邏輯：重建表並加入 unique constraint，去重保留每用戶首筆同名記錄
 - **驗收**：
-  1. 同一使用者無法建立兩本同名筆記本（API 回 409）
-  2. 不同使用者可同名（互不干擾）
-  3. `pytest tests/test_household.py` 全通過
+  1. 同一使用者無法建立兩本同名筆記本（資料庫層面 IntegrityError → API 回 409）✅
+  2. 不同使用者可同名（互不干擾）✅
+  3. 遷移正確處理既有重複資料（去重）✅
+  4. `pytest tests/test_household.py` 全通過 ✅
+  5. `pytest tests/` 全測試 45 通過 ✅
+  6. `bandit -r app/` 零高風險 ✅
 
 ### P1-3 標籤可見性查詢快取（請求級）
 - **現況**：`search_label(user_id)` 在單請求中被呼叫 3+ 次（工作區、標籤管理、標籤增刪）
@@ -175,6 +179,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.0 | 初版，依稽核報告建立 |
 | 2026-11-23 | 1.1 | P0-1 完成：搜尋結果摘要 XSS 風險修正（雙重防護：後端 `html.escape()` + 模板 `|e`） |
 | 2026-11-23 | 1.2 | P1-1 完成：`render_workspace` 合併查詢（CTE 遞迴查詢 `notebooks → topic_lists → topics`，查詢數從 9 降至 ≤3） |
+| 2026-11-23 | 1.3 | P1-2 完成：`Notebook` 加入 `UniqueConstraint(owner_id, name)`，遷移重建表並去重 |
 
 ---
 

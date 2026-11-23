@@ -175,10 +175,24 @@ def initialize_household(engine: Engine, partner_username: str | None = None) ->
                     if connection.scalar(select(User.username).where(User.id == 2)) != partner_username:
                         raise RuntimeError("第二帳號的名稱不符原有資料歸屬。請恢復原設定或先由本機管理員處理舊資料。")
                 if "owner_id" not in {column["name"] for column in schema.get_columns("notebooks")}:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE notebooks ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 1 REFERENCES users(id)"
-                    )
-                    connection.exec_driver_sql("ALTER TABLE notebooks ADD COLUMN is_shared BOOLEAN NOT NULL DEFAULT 0")
+                    # SQLite 不支援 ADD CONSTRAINT，需重建表以加入 UniqueConstraint(owner_id, name)
+                    connection.exec_driver_sql("""
+                        CREATE TEMP TABLE legacy_notebooks AS
+                        SELECT id, name, 1 AS owner_id, 0 AS is_shared
+                        FROM notebooks
+                    """)
+                    Notebook.__table__.drop(connection)
+                    Notebook.__table__.create(connection)
+                    # 去重：每位使用者保留首筆同名記錄
+                    connection.exec_driver_sql("""
+                        INSERT INTO notebooks (id, name, owner_id, is_shared)
+                        SELECT id, name, owner_id, is_shared
+                        FROM (
+                            SELECT *, ROW_NUMBER() OVER (PARTITION BY owner_id, name ORDER BY id) AS rn
+                            FROM legacy_notebooks
+                        ) WHERE rn = 1
+                    """)
+                    connection.exec_driver_sql("DROP TABLE legacy_notebooks")
                 if "owner_id" not in {column["name"] for column in schema.get_columns("templates")}:
                     connection.exec_driver_sql(
                         "ALTER TABLE templates ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 1 REFERENCES users(id)"
