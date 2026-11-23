@@ -8,7 +8,7 @@
         <li>
           <a href="/?kind=note&amp;item_id={{ result.id }}">
             <strong>{{ result.title }}</strong>
-            {% if result.summary %}<p class="note-preview">{{ result.summary }}</p>{% endif %}
+            {% if result.summary %}<p class="note-preview">{{ result.summary | e }}</p>{% endif %}
             <p class="crumb">{{ result.notebook }} / {{ result.topic }}</p>
             {{ note_updated(result.updated_at) }}
           </a>
@@ -17,6 +17,13 @@
     </ul>
   {% else %}
     <p class="muted">找不到符合條件的記事。</p>
+    {% if active %}
+      {% if tag %}
+        <p class="rule"><a class="button-link" href="/library/search?tag={{ tag.id }}">調整關鍵字</a></p>
+      {% else %}
+        <p class="rule"><a class="button-link" href="/library/search">調整關鍵字</a> 或 <a class="button-link" href="#new-note">新增記事</a></p>
+      {% endif %}
+    {% endif %}
   {% endif %}
   {% if previous or next %}
     <nav class="inline" aria-label="搜尋結果分頁">

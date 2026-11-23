@@ -1,5 +1,6 @@
 from datetime import datetime
 from html.parser import HTMLParser
+import html
 import re
 
 from sqlalchemy import DateTime, inspect, text
@@ -117,6 +118,8 @@ def search_rows(
         summary = ""
         if match or not query:
             summary = ("…" if start else "") + body[start:end] + ("…" if end < len(body) else "")
+        # 防 XSS：搜尋摘要需經 HTML 轉義再回傳，模板端亦加 |e 雙重防護。
+        summary = html.escape(summary)
         results.append({"id": row["id"], "title": row["title"], "notebook": row["notebook"],
                         "topic": row["topic"], "summary": summary, "updated_at": row["updated_at"]})
     return results, len(rows) > PAGE_SIZE
