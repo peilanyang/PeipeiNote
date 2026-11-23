@@ -825,6 +825,26 @@ def test_empty_search_results_keep_malicious_keyword_escaped(
     assert re.search(r'<a[^>]+href="/\?new_note=true"[^>]*>\s*新增記事</a>', html)
 
 
+def test_empty_template_library_cta_links_to_working_form(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 還沒有範本時，空狀態 CTA 必須指向會顯示新增表單的有效網址，而不是 422 的 selected=0。
+    submit(client, "/login", **credentials)
+    html = client.get("/library/templates").text
+    assert "目前沒有範本。" in html
+    assert re.search(r'<a[^>]+href="/library/templates"[^>]*>\s*新增第一個範本</a>', html)
+    # selected=0 會被端點的 gt=0 驗證拒絕，頁面上不可出現這類失效連結。
+    assert "selected=0" not in html
+    # 沿 CTA 網址重新開啟頁面，應看到可直接送出的新增範本表單。
+    target = client.get("/library/templates")
+    assert target.status_code == 200
+    assert 'action="/library/templates"' in target.text
+    assert 'name="name"' in target.text and "新增範本" in target.text
+    # 實際送出表單能建立第一份範本，確認 CTA 之後的操作流暢。
+    saved = submit(client, "/library/templates", name="第一份範本")
+    assert "第一份範本" in client.get(saved).text
+
+
 def test_export_word_and_print(client: TestClient, credentials: dict[str, str]) -> None:
     # 以實際上傳圖片與含表格的富文字驗證 Word 和列印輸出。
     from io import BytesIO

@@ -182,7 +182,7 @@
           </li>
         {% else %}
           <li class="muted">目前沒有{{ kind_label }}。</li>
-          <li class="rule"><a class="button-link primary" href="/library/{{ mode }}?selected=0">新增第一個{{ kind_label }}</a></li>
+          <li class="rule"><a class="button-link primary" href="/library/{{ mode }}">新增第一個{{ kind_label }}</a></li>
         {% endfor %}
       </ul>
       {% if item %}<p class="rule"><a href="/library/{{ mode }}">新增{{ kind_label }}</a></p>{% endif %}
