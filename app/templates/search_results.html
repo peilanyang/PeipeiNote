@@ -19,9 +19,9 @@
     <p class="muted">找不到符合條件的記事。</p>
     {% if active %}
       {% if tag %}
-        <p class="rule"><a class="button-link" href="/library/search?tag={{ tag.id }}">調整關鍵字</a></p>
+        <p class="rule"><a class="button-link" href="/library/search?tag={{ tag.id }}">調整關鍵字</a> 或 <a class="button-link" href="/?new_note=true">新增記事</a></p>
       {% else %}
-        <p class="rule"><a class="button-link" href="/library/search">調整關鍵字</a> 或 <a class="button-link" href="#new-note">新增記事</a></p>
+        <p class="rule"><a class="button-link" href="/library/search">調整關鍵字</a> 或 <a class="button-link" href="/?new_note=true">新增記事</a></p>
       {% endif %}
     {% endif %}
   {% endif %}

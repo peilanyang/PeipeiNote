@@ -10,7 +10,7 @@
 |------|--------|------|
 | **P0 立即修復（資安/嚴重邏輯）** | 1 | ✅ 完成 |
 | **P1 核心效能/資料完整性** | 3 | ✅ 3 完成 |
-| **P2 使用體驗明顯改善** | 2 | ✅ 1 完成 / ☐ 進行中 / ☐ 完成 |
+| **P2 使用體驗明顯改善** | 2 | ✅ 2 完成 |
 | **P3 細節打磨** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P4 架構評估/重構** | 1 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 
@@ -97,16 +97,30 @@
   - `test_library_tags_manage_nonexistent_tag_404`
   - `test_library_tags_manage_tag_notes_empty_state`
 
-### P2-2 空狀態加入 CTA 引導
+### P2-2 空狀態加入 CTA 引導 ✅
 - **目標位置與文案**：
   | 頁面 | 空狀態現況 | 新增 CTA |
   |------|------------|----------|
   | 主題無記事（`workspace.html:92`） | `這個主題還沒有記事。` | `+ <a href="#new-note">新增第一則記事</a>` |
   | 搜尋無結果（`search_results.html:19`） | `找不到符合條件的記事。` | `調整關鍵字或 <a href="/?new_note=true">新增記事</a>` |
   | 標籤無記事（`library.html` 新增區塊） | — | `此標籤下尚無記事，去 <a href="/?new_note=true">新增</a>？` |
+- **實作內容**：
+  - `app/templates/workspace.html`：主題沒有記事時，於記事清單下方新增主按鈕 `<a class="button-link primary" href="#new-note">新增第一則記事</a>`；同一頁已有 `id="new-note"` 的新增表單，且 `.new-note:target` 會自動加上綠框提示。
+  - `app/templates/search_results.html`：搜尋無結果的「新增記事」連結由失效的 `href="#new-note"` 改為 `href="/?new_note=true"`（搜尋頁本身沒有 `#new-note` 錨點），標籤篩選分支一併補上「新增記事」。
+  - `app/templates/library.html`：標籤無記事的 CTA 已於 P2-1 完成，本次僅納入回歸驗收。
 - **驗收**：
-  1. 視覺檢查：空狀態區塊有明確行動按鈕/連結
-  2. 操作流程：點擊 CTA → 正確導向新增記事表單/搜尋頁
+  1. 視覺檢查：空狀態區塊有明確行動按鈕/連結 ✅
+  2. 操作流程：點擊 CTA → 正確導向新增記事表單/搜尋頁 ✅
+  3. 主題有記事時不再顯示空狀態引導，避免重複提示 ✅
+  4. 搜尋頁與工作區局部搜尋（`partial=true`）都使用可用的 `/?new_note=true` ✅
+  5. 惡意關鍵字不會寫入空狀態連結，空狀態區塊不產生可執行標籤 ✅
+  6. `pytest tests/` 全測試 54 通過 ✅
+  7. `bandit -r app/` 零風險 ✅
+- **新增測試**：
+  - `test_empty_topic_offers_create_first_note_call_to_action`
+  - `test_empty_search_results_offer_search_and_create_actions`
+  - `test_partial_search_results_keep_create_action_target`
+  - `test_empty_search_results_keep_malicious_keyword_escaped`
 
 ---
 
@@ -196,6 +210,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.3 | P1-2 完成：`Notebook` 加入 `UniqueConstraint(owner_id, name)`，遷移重建表並去重 |
 | 2026-11-23 | 1.4 | P1-3 完成：標籤可見性查詢請求級快取（`get_visible_tag_ids` 取代多處 `search_label` 子查詢） |
 | 2026-11-23 | 1.5 | P2-1 完成：標籤管理頁內嵌記事列表（`manage()` 新增 `tag_notes` 分頁查詢、`library.html` 伺服端渲染並移除 AJAX、三欄響應式版面） |
+| 2026-11-23 | 1.6 | P2-2 完成：空狀態加入 CTA 引導（主題無記事新增「新增第一則記事」按鈕、搜尋無結果的「新增記事」改用可用的 `/?new_note=true`、標籤分支一併補上） |
 
 ---
 

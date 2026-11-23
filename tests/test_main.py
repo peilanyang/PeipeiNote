@@ -756,6 +756,75 @@ def test_library_tags_manage_tag_notes_empty_state(client: TestClient, credentia
     assert 'href="/?new_note=true"' in html
 
 
+def test_empty_topic_offers_create_first_note_call_to_action(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 主題沒有記事時，空狀態提供「新增第一則記事」按鈕並指向同頁的新增表單。
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/notebook", name="工作")
+    submit(client, "/workspace/section", parent_id=1, name="清單")
+    submit(client, "/workspace/topic", parent_id=1, name="主題")
+    response = client.get("/?kind=topic&item_id=1")
+    assert response.status_code == 200
+    html = response.text
+    assert "這個主題還沒有記事。" in html
+    # CTA 本身必須指向 #new-note，且同頁存在該錨點才能跳到新增記事表單。
+    assert re.search(r'<a[^>]+href="#new-note"[^>]*>\s*新增第一則記事</a>', html)
+    assert 'id="new-note"' in html
+    # 已有記事時不再顯示空狀態引導，避免重複提示。
+    submit(client, "/workspace/note", parent_id=1, name="第一則")
+    html = client.get("/?kind=topic&item_id=1").text
+    assert "這個主題還沒有記事。" not in html
+    assert "新增第一則記事" not in html
+
+
+def test_empty_search_results_offer_search_and_create_actions(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 搜尋沒有結果時，提供「調整關鍵字」與「新增記事」兩個明確動作。
+    submit(client, "/login", **credentials)
+    html = client.get("/library/search", params={"q": "不存在的關鍵字"}).text
+    assert "找不到符合條件的記事。" in html
+    assert re.search(r'<a[^>]+href="/library/search"[^>]*>\s*調整關鍵字</a>', html)
+    assert re.search(r'<a[^>]+href="/\?new_note=true"[^>]*>\s*新增記事</a>', html)
+    # 搜尋頁沒有 #new-note 錨點，不可使用會失效的片段連結。
+    assert 'href="#new-note"' not in html
+    # 點擊新增記事應導向首頁的快速新增表單。
+    assert 'id="quick-note"' in client.get("/?new_note=true").text
+    # 依標籤篩選但沒有結果時，同樣提供新增記事的動作。
+    submit(client, "/library/tags", name="旅遊")
+    tagged = client.get("/library/search", params={"tag": 1, "q": "查不到"}).text
+    assert "找不到符合條件的記事。" in tagged
+    assert re.search(r'<a[^>]+href="/\?new_note=true"[^>]*>\s*新增記事</a>', tagged)
+    assert re.search(r'<a[^>]+href="/library/search\?tag=1"[^>]*>\s*調整關鍵字</a>', tagged)
+
+
+def test_partial_search_results_keep_create_action_target(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 工作區的局部搜尋同樣提供可用的新增記事動作，不使用失效的片段連結。
+    submit(client, "/login", **credentials)
+    html = client.get("/library/search", params={"q": "查不到", "partial": "true"}).text
+    assert "找不到符合條件的記事。" in html
+    assert re.search(r'<a[^>]+href="/\?new_note=true"[^>]*>\s*新增記事</a>', html)
+    assert 'href="#new-note"' not in html
+
+
+def test_empty_search_results_keep_malicious_keyword_escaped(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 惡意關鍵字不會被寫入空狀態的行動連結，空狀態區塊也不產生可執行標籤。
+    submit(client, "/login", **credentials)
+    payload = '<script>alert(1)</script>'
+    response = client.get("/library/search", params={"q": payload})
+    assert response.status_code == 200
+    html = response.text
+    assert "找不到符合條件的記事。" in html
+    assert payload not in html
+    assert "<script>alert(1)</script>" not in html
+    assert re.search(r'<a[^>]+href="/\?new_note=true"[^>]*>\s*新增記事</a>', html)
+
+
 def test_export_word_and_print(client: TestClient, credentials: dict[str, str]) -> None:
     # 以實際上傳圖片與含表格的富文字驗證 Word 和列印輸出。
     from io import BytesIO

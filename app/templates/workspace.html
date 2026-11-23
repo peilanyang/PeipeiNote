@@ -91,6 +91,9 @@
             </a></li>
           {% else %}<li class="muted">這個主題還沒有記事。</li>{% endfor %}
         </ul>
+        {% if not notes %}
+          <p class="rule"><a class="button-link primary" href="#new-note">新增第一則記事</a></p>
+        {% endif %}
       </div>
       <div class="rule new-note" id="new-note">
         <form method="post" action="/workspace/note" class="stack">
