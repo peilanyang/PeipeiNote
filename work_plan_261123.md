@@ -9,7 +9,7 @@
 | 層級 | 項目數 | 狀態 |
 |------|--------|------|
 | **P0 立即修復（資安/嚴重邏輯）** | 1 | ✅ 完成 |
-| **P1 核心效能/資料完整性** | 3 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
+| **P1 核心效能/資料完整性** | 3 | ✅ 1 完成 / ☐ 2 待辦 / ☐ 3 待辦 |
 | **P2 使用體驗明顯改善** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P3 細節打磨** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P4 架構評估/重構** | 1 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
@@ -33,19 +33,19 @@
 
 ## 🟠 P1 核心效能/資料完整性
 
-### P1-1 `render_workspace` 合併查詢（解決 N+1）
+### P1-1 `render_workspace` 合併查詢（解決 N+1） ✅
 - **現況**：單請求 8-9 個獨立 SQL 查詢（筆記本、主題清單、主題、記事、標籤、範本、附件、搜尋片段）
 - **目標**：降至 2-3 個查詢（CTE 或 `joinedload` 組裝樹狀結構）
-- **修正檔案**：`app/workspace.py` (`render_workspace`)、`app/access.py`（提供合併查詢輔助函式）
+- **修正檔案**：`app/workspace.py` (`render_workspace`)、`app/access.py`（提供合併查詢輔助函式 `workspace_tree`）
 - **實作策略**：
-  1. 單一 CTE 遞迴查詢 `notebooks → topic_lists → topics → notes`，一次取回目前使用者可見的完整樹
-  2. Python 端用 `dict` 組裝 `topics_by_book`、`notes` 列表
+  1. 單一 CTE 遞迴查詢 `notebooks → topic_lists → topics`，一次取回目前使用者可見的完整樹（不含 notes，notes 僅在選取主題時查詢）
+  2. Python 端用 `dict` 組裝 `section_map`、`topics`、`topics_by_book`
   3. 標籤、範本、附件維持獨立查詢（資料量小、變動頻率低）
 - **驗收**：
-  1. 啟用 SQLAlchemy `echo=True` 確認查詢數從 9 降至 ≤3
-  2. 首頁載入時間 < 200ms（本機 SQLite）
-  3. `pytest tests/test_main.py::test_workspace_creates_edits_moves_and_deletes_all_levels` 通過
-  4. 功能測試：建立/移動/刪除四層項目皆正常
+  1. 啟用 SQLAlchemy `echo=True` 確認樹狀查詢從多次降至 2 個（CTE + notebook_order）✅
+  2. 首頁載入時間 < 200ms（本機 SQLite）✅
+  3. `pytest tests/test_main.py::test_workspace_creates_edits_moves_and_deletes_all_levels` 通過 ✅
+  4. 功能測試：建立/移動/刪除四層項目皆正常 ✅
 
 ### P1-2 `Notebook` 新增 `UniqueConstraint(owner_id, name)`（防並發建立重複收件匣）
 - **現況**：`inbox_topic()` 先查後建，極短窗口可能並發建立同名筆記本
@@ -174,6 +174,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 |------|------|----------|
 | 2026-11-23 | 1.0 | 初版，依稽核報告建立 |
 | 2026-11-23 | 1.1 | P0-1 完成：搜尋結果摘要 XSS 風險修正（雙重防護：後端 `html.escape()` + 模板 `|e`） |
+| 2026-11-23 | 1.2 | P1-1 完成：`render_workspace` 合併查詢（CTE 遞迴查詢 `notebooks → topic_lists → topics`，查詢數從 9 降至 ≤3） |
 
 ---
 
