@@ -299,7 +299,9 @@ def remove_item(db: Session, kind: Kind, item: Item, delete_descendants: bool) -
 
 def inbox_topic(db: Session, user_id: int) -> int:
     # 在同一筆交易建立或重用首則記事的收件匣，避免重複建立。
-    book = db.scalar(select(Notebook).where(Notebook.name == "收件匣", Notebook.owner_id == user_id, Notebook.is_shared.is_(False)).order_by(Notebook.id).limit(1))
+    # 收件匣以帳號區分：自己的收件匣即使已設為家庭共用，擁有者仍可繼續用它快速記事；
+    # (owner_id, name) 唯一約束保證不會出現第二本同名筆記本。
+    book = db.scalar(select(Notebook).where(Notebook.name == "收件匣", Notebook.owner_id == user_id).order_by(Notebook.id).limit(1))
     if book is None:
         book = Notebook(name="收件匣", owner_id=user_id)
         db.add(book)

@@ -5,8 +5,9 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import IntegrityError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.attachments import attachment_routes
@@ -70,6 +71,14 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[site.hostname])
+
+    @app.exception_handler(IntegrityError)
+    async def conflict_from_database(_request: Request, _exc: IntegrityError) -> JSONResponse:
+        # 資料庫層衝突（如同帳號建立重複筆記本名稱）統一回 409，不暴露 SQL 細節。
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "這個名稱已存在，或資料已改變。請重新載入頁面再試。"},
+        )
 
     app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
     app.include_router(workspace_actions(engine, settings, db_path.parent / "uploads"))

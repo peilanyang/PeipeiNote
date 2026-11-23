@@ -917,3 +917,50 @@ def test_home_quick_create_supports_first_note_and_existing_topics(
     assert "會議記事" in client.get(second).text
     assert "會議記事" in client.get("/?kind=topic&item_id=2").text
     assert "會議記事" not in client.get("/?kind=topic&item_id=1").text
+
+
+def test_duplicate_notebook_name_returns_conflict(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path,
+) -> None:
+    # 同帳號建立或改名到既有筆記本名稱時回 409，不回 500，也不留半筆資料。
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/notebook", name="工作")
+    duplicate = client.post(
+        "/workspace/notebook", data={"name": "工作"},
+        headers={"Origin": ORIGIN}, follow_redirects=False,
+    )
+    assert duplicate.status_code == 409
+    assert "名稱已存在" in duplicate.json()["detail"]
+    second = int(submit(client, "/workspace/notebook", name="備份").split("=")[-1])
+    renamed = client.post(
+        f"/workspace/notebook/{second}/save", data={"name": "工作"},
+        headers={"Origin": ORIGIN}, follow_redirects=False,
+    )
+    assert renamed.status_code == 409
+    with closing(sqlite3.connect(tmp_path / "test.db")) as database:
+        names = [row[0] for row in database.execute("SELECT name FROM notebooks ORDER BY id")]
+    assert names == ["工作", "備份"]
+    assert "Internal Server Error" not in client.get("/").text
+
+
+def test_shared_inbox_still_receives_quick_notes(
+    client: TestClient, credentials: dict[str, str], tmp_path: Path,
+) -> None:
+    # 自己的收件匣設為家庭共用後，快速建立仍重用同一本，不會再建第二本或報 500。
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/note", name="第一篇速記", use_inbox="true")
+    with closing(sqlite3.connect(tmp_path / "test.db")) as database:
+        inbox_id = database.execute("SELECT id FROM notebooks WHERE name = '收件匣'").fetchone()[0]
+        topic_id = database.execute(
+            "SELECT t.id FROM topics AS t JOIN topic_lists AS l ON t.topic_list_id = l.id "
+            "WHERE l.notebook_id = ? AND t.name = '隨手記'", (inbox_id,),
+        ).fetchone()[0]
+    submit(client, f"/workspace/notebook/{inbox_id}/share", is_shared="true")
+    # 刪掉匣內主題後，首頁快速建立表單會改用 use_inbox 送出。
+    submit(client, f"/workspace/topic/{topic_id}/delete", confirmed="true", delete_descendants="true")
+    assert "收件匣" in client.get("/?new_note=true").text
+    second = submit(client, "/workspace/note", name="第二篇速記", use_inbox="true")
+    assert "第二篇速記" in client.get(second).text
+    with closing(sqlite3.connect(tmp_path / "test.db")) as database:
+        assert database.execute("SELECT COUNT(*) FROM notebooks WHERE name = '收件匣'").fetchone()[0] == 1
+        assert database.execute("SELECT is_shared FROM notebooks WHERE id = ?", (inbox_id,)).fetchone()[0] == 1

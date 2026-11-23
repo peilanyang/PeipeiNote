@@ -52,6 +52,15 @@ def create_hierarchy(client: TestClient, prefix: str) -> tuple[int, int, int, in
     return book, section, topic, note
 
 
+def test_each_account_keeps_own_notebook_names(family: tuple[TestClient, TestClient]) -> None:
+    # 兩個帳號各可建立同名筆記本：唯一約束只限制同帳號內不重複。
+    a, b = family
+    submit(a, "/workspace/notebook", name="家庭帳本")
+    submit(b, "/workspace/notebook", name="家庭帳本")
+    assert "家庭帳本" in a.get("/").text
+    assert "家庭帳本" in b.get("/").text
+
+
 def test_private_notebook_and_library_are_isolated(family: tuple[TestClient, TestClient]) -> None:
     # A 能正常使用自己的資料，B 的私人資料即使知道 ID 也回傳 404。
     a, b = family

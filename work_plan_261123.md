@@ -285,7 +285,74 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.6 | P2-2 完成：空狀態加入 CTA 引導（主題無記事新增「新增第一則記事」按鈕、搜尋無結果的「新增記事」改用可用的 `/?new_note=true`、標籤分支一併補上） |
 | 2026-11-23 | 1.7 | P3-1 完成：匯出 Word 加入載入狀態（新增 `/static/export-loading.js`，按下後 `disabled` + `aria-busy` + 「產生中…」，改以 `fetch` 取回完整回應後才觸發 blob 下載；降級連結常駐 DOM，無 JavaScript 或程式檔載入失敗時仍可直接下載） |
 | 2026-11-23 | 1.8 | P3-2 完成：手機版編輯器工具列虛擬鍵盤適配（新增 `/static/editor-viewport.js`，以 `visualViewport` 量測鍵盤高度寫入 `--keyboard-inset`；手機版工具列改用 `position: fixed` 並刪除會讓工具列在打字時消失的 `focus-within` hack，補上內容與安全區補償；桌面版樣式不動） |
+| 2026-11-23 | 1.9 | D1+D2 完成：`main.py` 新增全域 `IntegrityError → 409` 例外處理器（回傳中性訊息、不洩露 SQL 細節）；`inbox_topic()` 移除 `is_shared` 過濾，擁有者設為家庭共用的收件匣仍可繼續快速記事；新增 3 個測試函式涵蓋 4 個場景（重複建立 409、改名衝突 409 且無殘留資料、共享收件匣後快速建立 303 且僅一本收件匣、不同帳號同名互不干擾）。100 項 pytest 全通過，Bandit 零問題 |
 
 ---
 
 > **備註**：本計畫嚴格遵循 `2_資安與規矩.md` §3「AI 施工與驗收工作流」——**一次只執行一個未完成項目**，通過測試與掃描後才勾選完成並提交版本。
+
+Cline稽核
+
+
+驗證完成，暫存檔已清理。以下是完整檢查結果。
+
+# 檢查結果：PeipeiNote 工作計畫完成度與邏輯缺陷
+
+## 一、工作計畫是否全部完成？
+
+**尚未全部完成 — 剩 1 項。** 計畫分兩層：
+
+| 層級 | 狀態 | 驗證方式 |
+|---|---|---|
+| `3_施工進度表.md` 步驟 1–15 | ✅ 15/15 全 `[x]` | 逐項讀碼確認 |
+| `work_plan_261123.md` P0–P3（9 項） | ✅ 9/9 完成 | 逐項讀碼確認 + 實測 |
+| `work_plan_261123.md` **P4-1**（評估移除 `TopicList` 層級） | ☐ **待辦** | 產出物 `docs/topic_list_removal_assessment.md` 不存在，`docs/` 目錄尚未建立 |
+
+已逐項核實 P0–P3 的修正確實存在於程式碼（非只勾勾選選）：P0-1 的 `html.escape` + 模板 `|e`（`search.py:122`、`search_results.html:11`）、P1-1 的 `workspace_tree` 合併查詢、P1-2 的 `UniqueConstraint(owner_id, name)` + 遷移去重、P1-3 的 `get_visible_tag_ids`、P2-1 的標籤頁內嵌分頁、P2-2 的空狀態 CTA、P3-1 的 `export-loading.js` 漸進式增強、P3-2 的 `editor-viewport.js` 鍵盤適配。
+
+**目前品質基線**：`pytest` 97 項全通過、`bandit -r app/` 0 個問題、git 已按項提交（P0-1 至 P3-2 各一筆）、`.env`/`*.db`/`uploads/` 確認被 `.gitignore` 排除、無 `.db` 檔案進入版本庫。
+
+> 附帶發現：本地 `main` 比 `origin/main` 超前 8 筆提交，尚未 push。
+
+## 二、經實測確認的邏輯缺陷（寫了臨時 TestClient 腳本逐一複現，已清理）
+
+### 🔴 D1：重複筆記本名稱回 500，不是計畫宣稱的 409
+P1-2 加了 unique constraint 後，**任何**觸發它的路徑都會變成未處理的 `IntegrityError` → 500：
+- 建立第二本同名筆記本 → **500**（實測）
+- 把「WorkB」改名成已存在的「Work」→ **500**（實測）
+
+`main.py` 沒有 `IntegrityError` 例外處理器，`workspace.py` 的 `create`/`change` 也沒預檢查。P1-2 驗收條款第 1 點寫「API 回 409」，但實測是 500——**該項驗收其實沒通過**。
+**修法**：`create_app` 加 `@app.exception_handler(IntegrityError)` 回 409，或於建立/改名端點做前置重複檢查。
+
+### 🔴 D2：共享「收件匣」後，首頁快速建立記事會 500（完整使用者情境）
+複現路徑：① 快速建立第一則記事（自動產生「收件匣」）→ ② 擁有者把收件匣設為共用 → ③ 刪掉匣內主題 → ④ 首頁點「新增記事」→ **500**。
+
+原因：`inbox_topic()`（`workspace.py:302`）查詢條件帶 `is_shared.is_(False)`，共享後查不到 → 嘗試再建一本「收件匣」→ 撞 D1 的 unique constraint。`is_shared=False` 這個過濾對「自己的收件匣」沒有意義（收件匣本來就是各帳號各一本），且 unique constraint 讓這個先查後建直接從「可能重複」變成「必然 500」。
+**修法**：移除該過濾直接重用自己的收件匣（无论共不共用），或捕獲 `IntegrityError` 後重查重用。
+
+### 🟡 D3：範本管理空狀態 CTA 是壞連結（422）
+`library.html:185` 的「新增第一個範本」指向 `/library/templates?selected=0`，但端點參數是 `Query(gt=0)` → **422 驗證錯誤頁**（實測）。用戶第一次進範本管理點 CTA 只會看到一頁錯誤。
+**修法**：連結改為 `/library/templates`（無 `selected` 時表單本來就會顯示為「新增範本」）。
+
+### 🟠 D4：夥伴可以改名共用筆記本（規格灰色地帶，需決定）
+實測夥伴對共用筆記本 POST `save` 改名 → **303 成功**。`change()` 裡 `owner_only = kind == Kind.notebook and action != Action.save` 明確豁免了 save。需求 3.0 第 25 行只列「共用切換、排序、刪除整本」屬擁有者，「共同編輯者**可在同一本共用筆記本內移動下層項目**」——對整本層級（含改名）是否開放，文件沒有明確答案。建議依「整本操作 = 擁有者」的原則改為 owner-only，或在 `1_需求藍圖.md` 明文豁免。
+
+## 三、程式碼檢視的其他問題（未實測、優先度較低）
+
+| # | 位置 | 問題 |
+|---|---|---|
+| D5 | `library.py:38` `fetch_tag_notes` | SELECT 了 `n.content, n.content_format` 全欄但完全沒用——標籤頁每次白背最多 51 則筆記的全文（單則可達 100KB），應從查詢移除 |
+| D6 | `library.html:166-171` | 未選取標籤時仍渲染空的 hidden `#tag-notes-panel`＋`#tag-notes-content`，是 P2-1 移除 AJAX 前的死 DOM 殘留 |
+| D7 | `access.py:43-49` | `workspace_tree` 文件字串寫「單一 CTE **遞迴**查詢、7 欄」，實際是兩個非遞迴 CTE、6 欄；計畫與 commit message 也跟著寫成「CTE 遞迴」。功能正常，但文件與事實不符容易誤導後續維護 |
+| D8 | `search.py:100` | ≥3 字元的多詞搜尋走 FTS5 trigram `MATCH '"..."'`，只匹配**連續子字串**：搜「藍色 天空」不會命中分開出現的 blue 與 sky（非 AND 語意）。個人用量可接受，建議在 README 記錄此已知限制 |
+| D9 | 稽核報告 §2.3–2.5 | 已記錄但未排程的效能債：深分頁 `OFFSET`、500 批次硬編碼、多處重複 `BEGIN IMMEDIATE` 未封裝、`notebook_order` 每請求都查 `NotebookPosition`——稽核當時評級為「目前規模可接受」 |
+
+## 四、建議的下一步（依「一次一項」施工規則）
+
+1. **D1 + D2 合併處理**（同一根源：unique constraint 無兜底）——加 `IntegrityError → 409` 處理器並修正 `inbox_topic` 的 `is_shared` 過濾，補 4 個測試（重複建立 409、改名衝突 409、共享收件匣後快速建立 303、不同帳號同名不衝突），再跑全測試 + bandit。 ✅ **已完成 2026-11-23（v1.9）**
+2. **D3** 一行修正 + 1 個 CTA 測試。
+3. **D4** 先做產品決定（owner-only 或明文豁免），再決定要不要動 `owner_only` 邏輯。
+4. **D5/D6/D7** 可併成一個小清理項目。
+5. **P4-1** 最後執行：產出 `docs/topic_list_removal_assessment.md`（依決策門檻：遷移 <50 行且風險可控才排程實施）。
+
+另外記得把本地 8 筆提交 push 到 `origin/main`。需要我直接開始修 D1/D2 的話，說一聲即可。
