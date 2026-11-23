@@ -40,12 +40,12 @@ def search_label(user_id: int) -> ColumnElement[bool]:
     return or_(visible_to(Tag, user_id), Tag.id.in_(linked.with_only_columns(note_tags.c.tag_id)))
 
 
-def workspace_tree(user_id: int) -> Select[tuple[int, str, int, str, int, str, int]]:
+def workspace_tree(user_id: int) -> Select[tuple[int, str, int, str, int, str]]:
     """
-    單一 CTE 遞迴查詢：一次取得使用者可見的完整工作區樹狀結構。
-    回傳欄位：(notebook_id, notebook_name, section_id, section_name, topic_id, topic_name, topic_notebook_id)
-
-    階層：notebooks → topic_lists (sections) → topics
+    以兩個非遞迴 CTE（visible_books → sections）串接 topics，
+    一次取得使用者可見的完整工作區樹（notebooks → topic_lists → topics）。
+    每行回傳 6 欄：(notebook_id, notebook_name, section_id, section_name, topic_id, topic_name)。
+    沒有主題的筆記本或清單不會出現，呼叫端以 .get() 處理缺失的層級。
     """
     # 基礎查詢：使用者可見的筆記本
     visible_books = select(

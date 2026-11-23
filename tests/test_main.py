@@ -756,6 +756,20 @@ def test_library_tags_manage_tag_notes_empty_state(client: TestClient, credentia
     assert 'href="/?new_note=true"' in html
 
 
+def test_library_tags_manage_without_selected_tag_has_no_dead_panel(
+    client: TestClient, credentials: dict[str, str],
+) -> None:
+    # 未選取標籤時不再渲染舊 AJAX 遺留的空面板；選取後頁面只有一個文章面板。
+    submit(client, "/login", **credentials)
+    submit(client, "/library/tags", name="空標籤")
+    unselected = client.get("/library/tags").text
+    assert 'id="tag-notes-content"' not in unselected
+    assert 'id="tag-notes-panel"' not in unselected
+    selected = client.get("/library/tags?selected=1").text
+    assert selected.count('id="tag-notes-panel"') == 1
+    assert 'id="tag-notes-content"' not in selected
+
+
 def test_empty_topic_offers_create_first_note_call_to_action(
     client: TestClient, credentials: dict[str, str],
 ) -> None:

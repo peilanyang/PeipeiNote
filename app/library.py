@@ -33,9 +33,10 @@ def fetch_tag_notes(db: Session, tag_id: int, user_id: int, page: int) -> tuple[
     """
     offset = (page - 1) * PAGE_SIZE
     limit = PAGE_SIZE + 1  # 多取一筆判斷是否還有下一頁
-    # 使用與 search_rows 相同的查詢邏輯，但不做全文搜尋，只按標籤過濾
+    # 使用與 search_rows 相同的查詢邏輯，但不做全文搜尋，只按標籤過濾；
+    # 列表只需要標題與位置欄位，不搬運記事全文。
     stmt = text("""
-        SELECT n.id, n.updated_at, n.title, n.content, n.content_format,
+        SELECT n.id, n.updated_at, n.title,
                b.name AS notebook, t.name AS topic
         FROM notes AS n
         JOIN note_tags AS nt ON nt.note_id = n.id

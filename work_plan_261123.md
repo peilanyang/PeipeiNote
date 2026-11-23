@@ -287,6 +287,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.8 | P3-2 完成：手機版編輯器工具列虛擬鍵盤適配（新增 `/static/editor-viewport.js`，以 `visualViewport` 量測鍵盤高度寫入 `--keyboard-inset`；手機版工具列改用 `position: fixed` 並刪除會讓工具列在打字時消失的 `focus-within` hack，補上內容與安全區補償；桌面版樣式不動） |
 | 2026-11-23 | 1.9 | D1+D2 完成：`main.py` 新增全域 `IntegrityError → 409` 例外處理器（回傳中性訊息、不洩露 SQL 細節）；`inbox_topic()` 移除 `is_shared` 過濾，擁有者設為家庭共用的收件匣仍可繼續快速記事；新增 3 個測試函式涵蓋 4 個場景（重複建立 409、改名衝突 409 且無殘留資料、共享收件匣後快速建立 303 且僅一本收件匣、不同帳號同名互不干擾）。100 項 pytest 全通過，Bandit 零問題 |
 | 2026-11-23 | 1.10 | D3 完成：`library.html` 範本管理空狀態 CTA「新增第一個範本」由會觸發 422 的 `/library/templates?selected=0` 改為 `/library/templates`（無 `selected` 時即顯示新增表單）；新增測試 `test_empty_template_library_cta_links_to_working_form` 驗證 CTA 連結有效、頁面無 `selected=0` 失效連結、表單可實際建立第一份範本。101 項 pytest 全通過，Bandit 零問題 |
+| 2026-11-23 | 1.11 | D5/D6/D7 小清理完成：D5 `fetch_tag_notes` 移除未使用的 `n.content, n.content_format`（標籤頁不再搬運最多 51 則記事全文）；D6 移除 `library.html` 未選取標籤時舊 AJAX 遺留的隱藏空面板（`#tag-notes-panel`/`#tag-notes-content` 死 DOM）；D7 修正 `workspace_tree` 文件字串與回傳型別標註（兩個非遞迴 CTE、每行 6 欄，原誤寫「遞迴、7 欄」）。新增 3 個測試：查詢層面確認標籤查詢不含 `n.content`、`workspace_tree` 每行 6 欄且只含可見主題、標籤頁無死面板。104 項 pytest 全通過，Bandit 零問題 |
 
 ---
 
@@ -353,7 +354,7 @@ P1-2 加了 unique constraint 後，**任何**觸發它的路徑都會變成未�
 1. **D1 + D2 合併處理**（同一根源：unique constraint 無兜底）——加 `IntegrityError → 409` 處理器並修正 `inbox_topic` 的 `is_shared` 過濾，補 4 個測試（重複建立 409、改名衝突 409、共享收件匣後快速建立 303、不同帳號同名不衝突），再跑全測試 + bandit。 ✅ **已完成 2026-11-23（v1.9）**
 2. **D3** 一行修正 + 1 個 CTA 測試。 ✅ **已完成 2026-11-23（v1.10）**
 3. **D4** 先做產品決定（owner-only 或明文豁免），再決定要不要動 `owner_only` 邏輯。
-4. **D5/D6/D7** 可併成一個小清理項目。
+4. **D5/D6/D7** 可併成一個小清理項目。 ✅ **已完成 2026-11-23（v1.11）**
 5. **P4-1** 最後執行：產出 `docs/topic_list_removal_assessment.md`（依決策門檻：遷移 <50 行且風險可控才排程實施）。
 
 另外記得把本地 8 筆提交 push 到 `origin/main`。需要我直接開始修 D1/D2 的話，說一聲即可。
