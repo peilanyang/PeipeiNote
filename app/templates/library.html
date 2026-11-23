@@ -22,7 +22,7 @@
     .library.tag-library { margin-inline: 0; max-width: 68rem; padding-inline: clamp(1rem, 3vw, 2rem); }
     .tag-layout { display: grid; gap: 1rem; margin-top: 1rem; }
     .tag-panel { min-width: 0; background: var(--paper); border: 1px solid var(--line);
-      border-radius: 10px; padding: 1rem; }
+      border-radius: 10px; padding: 1rem; scroll-margin-top: 1rem; }
     .tag-panel h3 { font-size: 1.03rem; }
     .tag-list { list-style: none; margin: .7rem 0 0; padding: 0; max-height: 25rem; overflow: auto; }
     .tag-row { display: flex; flex-wrap: wrap; gap: .4rem .75rem; align-items: center;
@@ -37,6 +37,19 @@
     .tag-create > summary::marker { content: ""; }
     .tag-create > summary::-webkit-details-marker { display: none; }
     .tag-panel .muted { margin-top: .4rem; }
+    .tag-notes-panel .list li { padding: .45rem 0; border-bottom: 1px solid var(--line); }
+    .tag-notes-panel .list li:last-child { border-bottom: 0; }
+    .tag-notes-panel .list a { text-decoration: none; }
+    .tag-notes-panel .list a:hover strong { text-decoration: underline; }
+    @media (min-width: 1100px) {
+      /* 寬螢幕：表單與列表靠左，文章列表佔右側欄位 */
+      .tag-layout { grid-template-columns: minmax(0, 18rem) minmax(0, 18rem) minmax(0, 1fr); align-items: start; }
+    }
+    @media (min-width: 760px) and (max-width: 1099px) {
+      /* 中螢幕：表單與列表並排，文章列表佔滿下方 */
+      .tag-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+      #tag-notes-panel { grid-column: 1 / -1; }
+    }
     @media (max-width: 700px) {
       .tag-layout { grid-template-columns: minmax(0, 1fr); }
       .tag-list { max-height: 15rem; }
@@ -113,7 +126,6 @@
               <li class="tag-row{% if item and entry.id == item.id %} is-selected{% endif %}" data-tag-id="{{ entry.id }}">
                 <a class="tag-row-title" href="/library/tags?selected={{ entry.id }}#tag-form"{% if item and entry.id == item.id %} aria-current="page"{% endif %}>{{ entry.name }}{% if entry.is_shared %} <span role="img" aria-label="家庭共用">👥</span>{% endif %}</a>
                 <span class="tag-actions">
-                  <button type="button" class="button-link tag-load-notes" data-tag-id="{{ entry.id }}" data-tag-name="{{ entry.name }}" aria-label="載入標籤文章：{{ entry.name }}">檢視文章</button>
                   {% if entry.owner_id == user_id %}<a href="/library/tags?selected={{ entry.id }}#tag-form" aria-label="編輯標籤：{{ entry.name }}">編輯</a>{% endif %}
                 </span>
               </li>
@@ -123,81 +135,42 @@
             {% endfor %}
           </ul>
         </section>
+        {% if item %}
+        <section class="tag-panel tag-notes-panel" aria-labelledby="tag-notes-heading" id="tag-notes-panel">
+          <div class="inline">
+            <h3 id="tag-notes-heading">標籤「{{ item.name }}」的文章</h3>
+          </div>
+          {% if tag_notes %}
+            <ul class="list">
+              {% for note in tag_notes %}
+                <li>
+                  <a href="/?kind=note&item_id={{ note.id }}" target="_blank" rel="noopener">
+                    <strong>{{ note.title | e }}</strong>
+                    <p class="crumb">{{ note.notebook }} / {{ note.topic }}</p>
+                    {% if note.updated_at %}<time class="note-updated" datetime="{{ note.updated_at.isoformat() }}Z">{{ note.updated_at.strftime('%Y-%m-%d %H:%M') }}</time>{% endif %}
+                  </a>
+                </li>
+              {% endfor %}
+            </ul>
+            {% if tag_notes_prev or tag_notes_next %}
+              <nav class="inline" aria-label="標籤文章分頁">
+                {% if tag_notes_prev %}<a class="button-link" href="{{ tag_notes_prev }}">上一頁</a>{% endif %}
+                {% if tag_notes_next %}<a class="button-link" href="{{ tag_notes_next }}">下一頁</a>{% endif %}
+              </nav>
+            {% endif %}
+          {% else %}
+            <p class="muted">此標籤下尚無記事，去 <a href="/?new_note=true">新增</a>？</p>
+          {% endif %}
+        </section>
+        {% else %}
         <section class="tag-panel" aria-labelledby="tag-notes-heading" id="tag-notes-panel" hidden>
           <div class="inline">
             <h3 id="tag-notes-heading"></h3>
-            <button type="button" class="button-link" id="tag-notes-close" aria-label="關閉文章列表">關閉</button>
           </div>
           <div id="tag-notes-content" class="list"></div>
         </section>
+        {% endif %}
       </div>
-      <script>
-        // 標籤管理頁：點擊「檢視文章」以 AJAX 載入文章列表
-        document.addEventListener('DOMContentLoaded', function() {
-          const tagList = document.getElementById('tag-list');
-          const notesPanel = document.getElementById('tag-notes-panel');
-          const notesHeading = document.getElementById('tag-notes-heading');
-          const notesContent = document.getElementById('tag-notes-content');
-          const closeBtn = document.getElementById('tag-notes-close');
-
-          if (!tagList || !notesPanel) return;
-
-          tagList.addEventListener('click', function(e) {
-            const btn = e.target.closest('.tag-load-notes');
-            if (!btn) return;
-            e.preventDefault();
-            const tagId = btn.dataset.tagId;
-            const tagName = btn.dataset.tagName;
-            loadTagNotes(tagId, tagName);
-          });
-
-          if (closeBtn) {
-            closeBtn.addEventListener('click', function() {
-              notesPanel.hidden = true;
-              notesContent.innerHTML = '';
-              notesHeading.textContent = '';
-            });
-          }
-
-          function loadTagNotes(tagId, tagName) {
-            notesHeading.textContent = '標籤「' + tagName + '」的文章';
-            notesContent.innerHTML = '<p class="muted">載入中...</p>';
-            notesPanel.hidden = false;
-
-            fetch('/library/search?tag=' + encodeURIComponent(tagId) + '&partial=true', {
-              headers: { 'X-Requested-With': 'XMLHttpRequest' }
-            })
-            .then(function(response) { return response.text(); })
-            .then(function(html) {
-              notesContent.innerHTML = html;
-              // 綁定分頁連結
-              notesContent.querySelectorAll('[data-search-page]').forEach(function(a) {
-                a.addEventListener('click', function(e) {
-                  e.preventDefault();
-                  notesContent.innerHTML = '<p class="muted">載入中...</p>';
-                  fetch(this.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
-                    .then(function(r) { return r.text(); })
-                    .then(function(h) { notesContent.innerHTML = h; });
-                });
-              });
-            })
-            .catch(function() {
-              notesContent.innerHTML = '<p class="muted">載入失敗，請重試。</p>';
-            });
-          }
-
-          // 若網址帶有 selected 參數，自動載入該標籤的文章
-          const urlParams = new URLSearchParams(window.location.search);
-          const selectedTag = urlParams.get('selected');
-          if (selectedTag) {
-            const row = tagList.querySelector('[data-tag-id="' + selectedTag + '"]');
-            if (row) {
-              const btn = row.querySelector('.tag-load-notes');
-              if (btn) btn.click();
-            }
-          }
-        });
-      </script>
     {% else %}
       {% set kind_label = '範本' %}
       {% set editable = not item or item.owner_id == user_id %}

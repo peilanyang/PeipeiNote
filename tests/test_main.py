@@ -642,6 +642,120 @@ def test_search_tags_and_template_workflow(client: TestClient, credentials: dict
     assert "北方之旅" not in client.get("/library/search", params={"q": "北海道"}).text
 
 
+def test_library_tags_manage_tag_notes_page_links(
+    client: TestClient, credentials: dict[str, str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 標籤文章列表分頁連結：頁數不足時不顯示，跨頁時產生上一頁/下一頁
+    from app import library
+    monkeypatch.setattr(library, "PAGE_SIZE", 2)
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/notebook", name="工作")
+    submit(client, "/workspace/section", parent_id=1, name="清單")
+    submit(client, "/workspace/topic", parent_id=1, name="主題")
+    submit(client, "/library/tags", name="測試標籤")
+    for i in range(1, 6):
+        submit(client, "/workspace/note", parent_id=1, name=f"文章{i}")
+        submit(client, f"/library/notes/{i}/tags", action="add", tag_id=1)
+
+    # 第 1 頁：2 筆，有下一頁、無上一頁
+    first = client.get("/library/tags?selected=1&tag_page=1")
+    assert first.status_code == 200
+    assert "tag_page=2" in first.text
+    assert "tag_page=0" not in first.text
+    assert "上一頁" not in first.text
+
+    # 第 2 頁：2 筆，兩頁都有
+    second = client.get("/library/tags?selected=1&tag_page=2")
+    assert second.status_code == 200
+    assert "tag_page=1" in second.text
+    assert "tag_page=3" in second.text
+    assert "上一頁" in second.text and "下一頁" in second.text
+
+    # 最後一頁：1 筆，有上一頁、無下一頁
+    last = client.get("/library/tags?selected=1&tag_page=3")
+    assert last.status_code == 200
+    assert "tag_page=2" in last.text
+    assert "tag_page=4" not in last.text
+    assert "上一頁" in last.text and "下一頁" not in last.text
+
+
+def test_library_tags_manage_with_selected_tag(client: TestClient, credentials: dict[str, str]) -> None:
+    # 標籤管理頁：選取標籤時右側顯示該標籤下的記事列表
+    submit(client, "/login", **credentials)
+    # 建立筆記本結構
+    submit(client, "/workspace/notebook", name="工作")
+    submit(client, "/workspace/section", parent_id=1, name="清單")
+    submit(client, "/workspace/topic", parent_id=1, name="主題")
+    # 建立標籤
+    submit(client, "/library/tags", name="旅遊")
+    # 建立記事並加上標籤
+    note1 = submit(client, "/workspace/note", parent_id=1, name="北方之旅")
+    submit(client, "/workspace/note/1/save", name="北方之旅", content="北海道旅行規劃")
+    submit(client, "/library/notes/1/tags", action="add", tag_id=1)
+    note2 = submit(client, "/workspace/note", parent_id=1, name="南方之旅")
+    submit(client, "/workspace/note/2/save", name="南方之旅", content="沖繩旅行規劃")
+    submit(client, "/library/notes/2/tags", action="add", tag_id=1)
+
+    # GET /library/tags?selected=1 應回傳該標籤的文章
+    response = client.get("/library/tags?selected=1")
+    assert response.status_code == 200
+    html = response.text
+    assert "標籤「旅遊」的文章" in html
+    assert "北方之旅" in html
+    assert "南方之旅" in html
+    # 文章標題應可點擊跳轉編輯頁（新分頁）
+    assert 'href="/?kind=note&item_id=1"' in html
+    assert 'href="/?kind=note&item_id=2"' in html
+
+
+def test_library_tags_manage_tag_notes_pagination(client: TestClient, credentials: dict[str, str]) -> None:
+    # 標籤文章列表分頁：測試 tag_page 參數傳遞與連結生成
+    # 先用少量資料驗證基本功能，再用較多資料驗證不分頁
+    from app.search import PAGE_SIZE
+    submit(client, "/login", **credentials)
+    submit(client, "/workspace/notebook", name="工作")
+    submit(client, "/workspace/section", parent_id=1, name="清單")
+    submit(client, "/workspace/topic", parent_id=1, name="主題")
+    submit(client, "/library/tags", name="測試標籤")
+
+    # 建立 3 篇文章
+    for i in range(1, 4):
+        submit(client, "/workspace/note", parent_id=1, name=f"文章{i}")
+        submit(client, f"/workspace/note/{i}/save", name=f"文章{i}", content=f"內容{i}")
+        submit(client, f"/library/notes/{i}/tags", action="add", tag_id=1)
+
+    # 第 1 頁 - 3 筆 < PAGE_SIZE(50) 不會分頁
+    response = client.get("/library/tags?selected=1&tag_page=1")
+    assert response.status_code == 200
+    assert "tag_page=2" not in response.text
+
+    # 驗證所有 3 篇文章都在第一頁顯示
+    for note_id in range(1, 4):
+        assert f'item_id={note_id}' in response.text
+
+    # 測試傳入不存在的頁碼不會報錯
+    response = client.get("/library/tags?selected=1&tag_page=999")
+    assert response.status_code == 200
+
+
+def test_library_tags_manage_nonexistent_tag_404(client: TestClient, credentials: dict[str, str]) -> None:
+    # 選取不存在的標籤回傳 404
+    submit(client, "/login", **credentials)
+    response = client.get("/library/tags?selected=999")
+    assert response.status_code == 404
+
+
+def test_library_tags_manage_tag_notes_empty_state(client: TestClient, credentials: dict[str, str]) -> None:
+    # 標籤無文章時顯示空狀態與 CTA
+    submit(client, "/login", **credentials)
+    submit(client, "/library/tags", name="空標籤")
+    response = client.get("/library/tags?selected=1")
+    assert response.status_code == 200
+    html = response.text
+    assert "此標籤下尚無記事" in html
+    assert 'href="/?new_note=true"' in html
+
+
 def test_export_word_and_print(client: TestClient, credentials: dict[str, str]) -> None:
     # 以實際上傳圖片與含表格的富文字驗證 Word 和列印輸出。
     from io import BytesIO

@@ -10,7 +10,7 @@
 |------|--------|------|
 | **P0 立即修復（資安/嚴重邏輯）** | 1 | ✅ 完成 |
 | **P1 核心效能/資料完整性** | 3 | ✅ 3 完成 |
-| **P2 使用體驗明顯改善** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
+| **P2 使用體驗明顯改善** | 2 | ✅ 1 完成 / ☐ 進行中 / ☐ 完成 |
 | **P3 細節打磨** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P4 架構評估/重構** | 1 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 
@@ -76,17 +76,26 @@
 
 ## 🟡 P2 使用體驗明顯改善
 
-### P2-1 標籤管理頁內嵌記事列表（減少跳轉）
+### P2-1 標籤管理頁內嵌記事列表（減少跳轉） ✅
 - **現況**：點「查看記事」跳轉 `/library/search?tag=...`，脫離管理上下文
 - **目標**：`library.html` 模式 `tags` 時，右側面板直接顯示該標籤下的記事列表（分頁、可點擊跳轉編輯）
 - **修正檔案**：
-  - `app/library.py`：`manage()` 傳入 `tag_notes`（分頁查詢）
-  - `app/templates/library.html`：`tag-panel` 右側新增 `tag-notes` 區塊
+  - `app/library.py`：`manage()` 新增 `tag_page` 參數，新增 `fetch_tag_notes()` 查詢指定標籤下的記事（分頁、授權檢查）
+  - `app/templates/library.html`：`tag-panel` 右側直接渲染 `tag_notes` 列表（伺服端渲染，移除 AJAX），空狀態顯示 CTA
+  - `app/templates/library.html`：`.tag-layout` 改為三欄響應式網格（≥1100px 表單/列表/文章三欄並排、760–1099px 兩欄、<700px 單欄）
 - **驗收**：
-  1. 標籤列表點選某標籤 → 右側即時顯示該標籤文章（無頁面跳轉）
-  2. 點文章標題 → 新分頁開啟編輯頁
-  3. 分頁切換正常
-  4. `pytest tests/test_main.py::test_search_tags_and_template_workflow` 通過
+  1. 標籤列表點選某標籤 → 右側即時顯示該標籤文章（無頁面跳轉）✅
+  2. 點文章標題 → 新分頁開啟編輯頁（`target="_blank" rel="noopener"`）✅
+  3. 分頁切換正常（`tag_page` 參數）✅
+  4. `pytest tests/test_main.py::test_search_tags_and_template_workflow` 通過 ✅
+  5. `pytest tests/` 全測試 50 通過 ✅
+  6. `bandit -r app/` 零風險 ✅
+- **新增測試**：
+  - `test_library_tags_manage_with_selected_tag`
+  - `test_library_tags_manage_tag_notes_page_links`（以 `monkeypatch` 縮小 `PAGE_SIZE` 驗證分頁連結）
+  - `test_library_tags_manage_tag_notes_pagination`
+  - `test_library_tags_manage_nonexistent_tag_404`
+  - `test_library_tags_manage_tag_notes_empty_state`
 
 ### P2-2 空狀態加入 CTA 引導
 - **目標位置與文案**：
@@ -186,6 +195,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.2 | P1-1 完成：`render_workspace` 合併查詢（CTE 遞迴查詢 `notebooks → topic_lists → topics`，查詢數從 9 降至 ≤3） |
 | 2026-11-23 | 1.3 | P1-2 完成：`Notebook` 加入 `UniqueConstraint(owner_id, name)`，遷移重建表並去重 |
 | 2026-11-23 | 1.4 | P1-3 完成：標籤可見性查詢請求級快取（`get_visible_tag_ids` 取代多處 `search_label` 子查詢） |
+| 2026-11-23 | 1.5 | P2-1 完成：標籤管理頁內嵌記事列表（`manage()` 新增 `tag_notes` 分頁查詢、`library.html` 伺服端渲染並移除 AJAX、三欄響應式版面） |
 
 ---
 

@@ -1,9 +1,10 @@
+from datetime import datetime
 from typing import Annotated, Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Path, Query, Request
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, text
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -12,7 +13,7 @@ from app.access import notebook_items, search_label, visible_to, get_visible_tag
 from app.auth import Settings, require_user
 from app.database import Note, Notebook, Tag, Template, note_tags
 from app.richtext import NoteFormat, template_html
-from app.search import note_text, search_rows
+from app.search import note_text, search_rows, PAGE_SIZE
 from app.workspace import CONTENT_LIMIT, MAX_ID, NAME_LIMIT, Kind, get_item, templates
 
 LibraryKind = Literal["tags", "templates"]
@@ -23,6 +24,47 @@ def library_location(kind: str, **params: str | int | None) -> str:
     # 建立內部連結，所有查詢值依網址規則編碼。
     query = urlencode({key: value for key, value in params.items() if value is not None and value != ""})
     return f"/library/{kind}" + (f"?{query}" if query else "")
+
+
+def fetch_tag_notes(db: Session, tag_id: int, user_id: int, page: int) -> tuple[list[dict], bool]:
+    """
+    取得指定標籤下的記事列表（分頁），只回傳使用者可見的記事。
+    回傳: (notes_list, has_more)
+    """
+    offset = (page - 1) * PAGE_SIZE
+    limit = PAGE_SIZE + 1  # 多取一筆判斷是否還有下一頁
+    # 使用與 search_rows 相同的查詢邏輯，但不做全文搜尋，只按標籤過濾
+    stmt = text("""
+        SELECT n.id, n.updated_at, n.title, n.content, n.content_format,
+               b.name AS notebook, t.name AS topic
+        FROM notes AS n
+        JOIN note_tags AS nt ON nt.note_id = n.id
+        JOIN topics AS t ON n.topic_id = t.id
+        JOIN topic_lists AS l ON t.topic_list_id = l.id
+        JOIN notebooks AS b ON l.notebook_id = b.id
+        WHERE nt.tag_id = :tag_id
+          AND (b.owner_id = :user_id OR b.is_shared = 1)
+        ORDER BY n.id DESC
+        LIMIT :limit OFFSET :offset
+    """)
+    rows = db.execute(stmt, {"tag_id": tag_id, "user_id": user_id, "limit": limit, "offset": offset}).mappings().all()
+    notes = []
+    for row in rows[:PAGE_SIZE]:
+        # SQLite 回傳 updated_at 為字串，需轉為 datetime
+        updated_at = row["updated_at"]
+        if isinstance(updated_at, str):
+            try:
+                updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            except ValueError:
+                updated_at = None
+        notes.append({
+            "id": row["id"],
+            "title": row["title"],
+            "notebook": row["notebook"],
+            "topic": row["topic"],
+            "updated_at": updated_at,
+        })
+    return notes, len(rows) > PAGE_SIZE
 
 
 def library_routes(engine: Engine, settings: Settings) -> APIRouter:
@@ -64,7 +106,10 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
 
     @router.get("/{kind}")
     def manage(
-        request: Request, kind: LibraryKind, selected: Annotated[int | None, Query(gt=0, le=MAX_ID)] = None,
+        request: Request,
+        kind: LibraryKind,
+        selected: Annotated[int | None, Query(gt=0, le=MAX_ID)] = None,
+        tag_page: Annotated[int, Query(ge=1, le=100000)] = 1,
     ) -> Response:
         # 清單與編輯表單共用頁面，富文字範本以淨化後的內容載入。
         user_id = require_user(engine, settings, request)
@@ -75,14 +120,36 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
             item = db.scalar(visible.where(model.id == selected)) if selected is not None else None
             if selected is not None and item is None:
                 raise HTTPException(404, "找不到選取的項目。")
+
+            # 標籤模式且選取了標籤：查詢該標籤下的記事列表
+            tag_notes = []
+            tag_notes_prev = ""
+            tag_notes_next = ""
+            if kind == "tags" and selected is not None:
+                # 再次確認標籤對當前用戶可見
+                visible_tag_ids = get_visible_tag_ids(db, user_id)
+                if selected in visible_tag_ids:
+                    tag_notes, has_more = fetch_tag_notes(db, selected, user_id, tag_page)
+                    if tag_page > 1:
+                        tag_notes_prev = library_location("tags", selected=selected, tag_page=tag_page - 1)
+                    if has_more:
+                        tag_notes_next = library_location("tags", selected=selected, tag_page=tag_page + 1)
+
             return templates.TemplateResponse(
                 request=request, name="library.html",
                 context={
-                    "mode": kind, "items": list(db.scalars(visible.order_by(model.name, model.id))), "user_id": user_id,
-                    "item": item, "editor_content_format": item.content_format if isinstance(item, Template) else "plain",
+                    "mode": kind,
+                    "items": list(db.scalars(visible.order_by(model.name, model.id))),
+                    "user_id": user_id,
+                    "item": item,
+                    "editor_content_format": item.content_format if isinstance(item, Template) else "plain",
                     "editor_content": (
                         template_html(item.content) if item.content_format == "html" else item.content
                     ) if isinstance(item, Template) else "",
+                    "tag_notes": tag_notes,
+                    "tag_notes_prev": tag_notes_prev,
+                    "tag_notes_next": tag_notes_next,
+                    "tag_page": tag_page,
                 }, headers={"Cache-Control": "no-store"},
             )
 
