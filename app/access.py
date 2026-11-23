@@ -72,3 +72,14 @@ def workspace_tree(user_id: int) -> Select[tuple[int, str, int, str, int, str, i
     ).join(Topic, Topic.topic_list_id == sections.c.section_id)
 
     return topics
+
+
+def get_visible_tag_ids(db: Session, user_id: int) -> set[int]:
+    """
+    單次查詢取得使用者可見的標籤 ID 集合（請求級快取）。
+    包含：1) 使用者擁有的標籤 2) 共用標籤 3) 連結在使用者可見記事上的標籤
+    """
+    # 使用 search_label 條件：擁有者或共用，或連結在可見記事上
+    linked = notebook_items(Note, user_id).join(note_tags, note_tags.c.note_id == Note.id)
+    condition = or_(visible_to(Tag, user_id), Tag.id.in_(linked.with_only_columns(note_tags.c.tag_id)))
+    return set(db.scalars(select(Tag.id).where(condition)).all())

@@ -8,7 +8,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.access import notebook_items, search_label, visible_to
+from app.access import notebook_items, search_label, visible_to, get_visible_tag_ids
 from app.auth import Settings, require_user
 from app.database import Note, Notebook, Tag, Template, note_tags
 from app.richtext import NoteFormat, template_html
@@ -45,7 +45,9 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
             db.connection().exec_driver_sql("BEGIN")
             if book:
                 get_item(db, Kind.notebook, book, user_id)
-            label = db.scalar(select(Tag).where(Tag.id == tag, search_label(user_id))) if tag is not None else None
+            # 使用快取的可見標籤 ID，避免重複執行 search_label 子查詢
+            visible_tag_ids = get_visible_tag_ids(db, user_id)
+            label = db.scalar(select(Tag).where(Tag.id == tag, Tag.id.in_(visible_tag_ids))) if tag is not None else None
             if tag is not None and label is None:
                 raise HTTPException(404, "找不到這個標籤。")
             active = bool(query or label)
@@ -141,12 +143,16 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
         with Session(engine) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN IMMEDIATE")
             get_item(db, Kind.note, note_id, user_id)
-            tag_access = visible_to(Tag, user_id)
+            # 使用快取的可見標籤 ID
+            visible_tag_ids = get_visible_tag_ids(db, user_id)
             if action == "remove":
-                # 共用記事的編輯者可以移除已附上的標籤，但不能附上別人的私人標籤。
-                linked = select(note_tags.c.tag_id).where(note_tags.c.note_id == note_id)
-                tag_access = or_(tag_access, Tag.id.in_(linked))
-            if db.scalar(select(Tag.id).where(Tag.id == tag_id, tag_access)) is None:
+                # 移除時：允許移除已連結在該記事上的標籤（即使非可見），以及可見標籤
+                linked_tag_ids = set(db.scalars(select(note_tags.c.tag_id).where(note_tags.c.note_id == note_id)).all())
+                allowed_tag_ids = visible_tag_ids | linked_tag_ids
+            else:
+                # 新增時：只允許加上可見標籤
+                allowed_tag_ids = visible_tag_ids
+            if tag_id not in allowed_tag_ids:
                 raise HTTPException(404, "找不到這個標籤。")
             if action == "add":
                 db.execute(insert(note_tags).values(note_id=note_id, tag_id=tag_id).on_conflict_do_nothing())

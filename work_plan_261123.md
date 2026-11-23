@@ -9,7 +9,7 @@
 | 層級 | 項目數 | 狀態 |
 |------|--------|------|
 | **P0 立即修復（資安/嚴重邏輯）** | 1 | ✅ 完成 |
-| **P1 核心效能/資料完整性** | 3 | ✅ 2 完成 / ☐ 3 待辦 |
+| **P1 核心效能/資料完整性** | 3 | ✅ 3 完成 |
 | **P2 使用體驗明顯改善** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P3 細節打磨** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 | **P4 架構評估/重構** | 1 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
@@ -60,12 +60,17 @@
   5. `pytest tests/` 全測試 45 通過 ✅
   6. `bandit -r app/` 零高風險 ✅
 
-### P1-3 標籤可見性查詢快取（請求級）
+### P1-3 標籤可見性查詢快取（請求級） ✅
 - **現況**：`search_label(user_id)` 在單請求中被呼叫 3+ 次（工作區、標籤管理、標籤增刪）
-- **修正位置**：`app/access.py` 新增 `get_visible_tag_ids(db, user_id) -> set[int]`，`render_workspace`、`library_routes` 共用
+- **修正位置**：
+  - `app/access.py:76-88` 新增 `get_visible_tag_ids(db, user_id) -> set[int]` 單次查詢取得可見標籤 ID 集合
+  - `app/workspace.py:179` `render_workspace` 改用快取函式
+  - `app/library.py:51, 155` `search_page`、`update_note_tag` 改用快取函式
 - **驗收**：
-  1. SQLAlchemy `echo=True` 確認 `visible_to(Tag, user_id)` 子查詢每請求只執行 1 次
-  2. 現有標籤增刪改查、搜尋篩選功能測試全通過
+  1. `get_visible_tag_ids` 單次查詢取代多處 `search_label` 子查詢 ✅
+  2. `pytest tests/` 全測試 45 通過 ✅
+  3. `bandit -r app/` 零高風險 ✅
+  4. 標籤搜尋、增刪改查功能正常 ✅
 
 ---
 
@@ -180,6 +185,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.1 | P0-1 完成：搜尋結果摘要 XSS 風險修正（雙重防護：後端 `html.escape()` + 模板 `|e`） |
 | 2026-11-23 | 1.2 | P1-1 完成：`render_workspace` 合併查詢（CTE 遞迴查詢 `notebooks → topic_lists → topics`，查詢數從 9 降至 ≤3） |
 | 2026-11-23 | 1.3 | P1-2 完成：`Notebook` 加入 `UniqueConstraint(owner_id, name)`，遷移重建表並去重 |
+| 2026-11-23 | 1.4 | P1-3 完成：標籤可見性查詢請求級快取（`get_visible_tag_ids` 取代多處 `search_label` 子查詢） |
 
 ---
 

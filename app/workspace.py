@@ -10,7 +10,7 @@ from sqlalchemy import Select, column, delete, func, or_, select, table
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.access import containing_book, notebook_items, visible_to, workspace_tree
+from app.access import containing_book, notebook_items, visible_to, workspace_tree, get_visible_tag_ids
 from app.attachments import remove_stored_attachment
 from app.auth import ROOT, Settings, require_user
 from app.database import (
@@ -175,12 +175,13 @@ def render_workspace(
                 if row.id != active.get(parent.value)
             ]
 
-        # 標籤：一次查詢取得所有可見標籤，另一次查詢取得該記事已掛標籤
-        tags = list(db.scalars(select(Tag).where(visible_to(Tag, user_id)).order_by(Tag.name)))
+        # 標籤：使用快取的可見標籤 ID，避免重複執行子查詢
+        visible_tag_ids = get_visible_tag_ids(db, user_id)
+        tags = list(db.scalars(select(Tag).where(Tag.id.in_(visible_tag_ids)).order_by(Tag.name))) if visible_tag_ids else []
         assigned_tags = []
         if isinstance(selection, Note):
             # 可見標籤限制：擁有者或共用，且需能存取該記事
-            visible_note_tags = notebook_items(Note, user_id).join(note_tags, note_tags.c.note_id == Note.id)
+            visible_note_tags = notebook_items(Note, user_id).join(note_tags, note_tags.c.tag_id == Tag.id).where(Note.id == selection.id)
             query = visible_note_tags.join(Tag, Tag.id == note_tags.c.tag_id).where(Note.id == selection.id)
             assigned_tags = list(db.scalars(query.with_only_columns(Tag).order_by(Tag.name)))
         assigned_tag_ids = {tag.id for tag in assigned_tags}
