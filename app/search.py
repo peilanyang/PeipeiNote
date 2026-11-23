@@ -92,26 +92,50 @@ SEARCH_SELECT = """
 """
 
 
+def _fts_literal(term: str) -> str:
+    # FTS5 字串字面量以雙引號包起，內部的 " 加倍轉義；整串仍綁定為參數防注入。
+    return '"' + term.replace('"', '""') + '"'
+
+
+def search_clauses(query: str) -> tuple[list[str], dict[str, str]]:
+    # 依空白拆成獨立關鍵字：所有關鍵字須同時出現（AND），每個關鍵字是連續子字串、
+    # 標題或內文任一欄命中即可。≥3 字元的詞用 FTS5 trigram 以 AND 合併查詢；
+    # 較短的詞組不成 trigram（查詢永遠不命中），改以 instr 子字串比對。
+    terms = [term for term in query.split() if term]
+    clauses: list[str] = []
+    params: dict[str, str] = {}
+    long_terms = [term for term in terms if len(term) >= 3]
+    if long_terms:
+        clauses.append("note_search MATCH :phrase")
+        params["phrase"] = " AND ".join(_fts_literal(term) for term in long_terms)
+    for index, term in enumerate(term for term in terms if len(term) < 3):
+        name = f"short{index}"
+        clauses.append(f"(instr(lower(s.title), lower(:{name})) > 0 OR instr(lower(s.body), lower(:{name})) > 0)")
+        params[name] = term
+    return clauses, params
+
+
 def search_rows(
     db: Session, query: str, book: int | None, tag: int | None, page: int, user_id: int,
 ) -> tuple[list[dict[str, str | int | datetime | None]], bool]:
-    # 將使用者輸入綁定為參數，長詞走 FTS5，短詞仍可搜尋中文。
-    if len(query) >= 3:
-        condition = " AND note_search MATCH :phrase ORDER BY n.id DESC "
-    elif query:
-        condition = " AND (instr(lower(s.title), lower(:query)) > 0 OR instr(lower(s.body), lower(:query)) > 0) ORDER BY n.id DESC "
-    else:
-        condition = " ORDER BY n.id DESC "
-    statement = text(SEARCH_SELECT + condition + "LIMIT :limit OFFSET :offset").columns(updated_at=DateTime())
+    # 多詞為 AND 語意：舊「含空格的連續片段」搜尋結果必然是新結果的子集，不會遺漏舊可搜到的記事。
+    clauses, term_params = search_clauses(query)
+    condition = " AND (" + " AND ".join(clauses) + ")" if clauses else ""
+    statement = text(SEARCH_SELECT + condition + " ORDER BY n.id DESC LIMIT :limit OFFSET :offset").columns(updated_at=DateTime())
     rows = db.execute(statement, {
-        "user_id": user_id, "book": book, "tag": tag, "query": query,
-        "phrase": '"' + query.replace('"', '""') + '"',
+        "user_id": user_id, "book": book, "tag": tag,
+        **term_params,
         "limit": PAGE_SIZE + 1, "offset": (page - 1) * PAGE_SIZE,
     }).mappings().all()
     results = []
     for row in rows[:PAGE_SIZE]:
         body = row["body"]
-        match = re.search(re.escape(query), body, re.IGNORECASE) if query else None
+        # 多詞 AND 時整串不一定連續：摘要改以內文中第一個命中的關鍵字定位。
+        match = None
+        for term in query.split():
+            match = re.search(re.escape(term), body, re.IGNORECASE)
+            if match:
+                break
         start = max(0, match.start() - 24) if match else 0
         end = min(len(body), max(start + 110, match.end())) if match else min(len(body), 110)
         # 只命中標題時，結果已顯示完整標題，省略無關的內文片段。
