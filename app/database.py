@@ -29,6 +29,7 @@ class Owned:
 
 class Notebook(Owned, Base):
     __tablename__ = "notebooks"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_notebook_owner_name"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]

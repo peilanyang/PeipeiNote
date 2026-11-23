@@ -104,6 +104,7 @@ def render_workspace(
     request: Request, engine: Engine, user_id: int, kind: Kind | None, item_id: int | None, new_note: bool = False,
 ) -> Response:
     # 左欄讀取階層，中欄只查詢目前主題的記事，右欄載入選取的項目。
+    # 優化：合併查詢減少資料庫往返，單次交易完成所有讀取。
     with Session(engine) as db, db.begin():
         db.connection().exec_driver_sql("BEGIN")
         selection = get_item(db, kind, item_id, user_id) if kind is not None and item_id is not None else None
@@ -113,17 +114,35 @@ def render_workspace(
             kind = Kind.notebook
         books = notebook_order(db, user_id)
         own_books = [book for book in books if book.owner_id == user_id]
-        sections = list(db.scalars(notebook_items(TopicList, user_id).order_by(TopicList.id)))
-        topics = list(db.scalars(notebook_items(Topic, user_id).order_by(Topic.id)))
+
+        # 合併查詢：一次取得 section 與 topic，避免兩次獨立查詢
+        # 先取得使用者可見的 section_id 清單
+        visible_sections = db.scalars(
+            notebook_items(TopicList, user_id).with_only_columns(TopicList.id).order_by(TopicList.id)
+        ).all()
+        section_ids = list(visible_sections)
+        # 取得 section 物件以便後續使用
+        section_map = {sid: db.get(TopicList, sid) for sid in section_ids} if section_ids else {}
+
+        topics = []
+        topics_by_book: dict[int, list[Topic]] = {}
+        if section_ids:
+            # 單次查詢取得所有 topic，包含筆記本
+            topic_rows = db.execute(
+                select(Topic, TopicList.notebook_id)
+                .join(TopicList, Topic.topic_list_id == TopicList.id)
+                .where(TopicList.id.in_(section_ids))
+                .order_by(Topic.id)
+            ).all()
+            for topic, notebook_id in topic_rows:
+                topics.append(topic)
+                topics_by_book.setdefault(notebook_id, []).append(topic)
+
         items = {
             Kind.notebook: {row.id: row for row in books},
-            Kind.section: {row.id: row for row in sections},
+            Kind.section: section_map,
             Kind.topic: {row.id: row for row in topics},
         }
-        topics_by_book: dict[int, list[Topic]] = {}
-        for topic in topics:
-            notebook_id = items[Kind.section][topic.topic_list_id].notebook_id
-            topics_by_book.setdefault(notebook_id, []).append(topic)
         active = {}
         ancestor = selection
         ancestor_kind = kind
@@ -136,6 +155,8 @@ def render_workspace(
         topic_id = active.get("topic")
         active_book = items[Kind.notebook].get(active.get("notebook"))
         owns_notebook = active_book is not None and active_book.owner_id == user_id
+
+        # 記事列表：同主題下的記事，含 FTS5 摘要
         notes = db.execute(
             notebook_items(Note, user_id).with_only_columns(
                 Note.id, Note.title, Note.updated_at, func.substr(search_text.c.body, 1, 100).label("preview")
@@ -143,6 +164,7 @@ def render_workspace(
             .outerjoin(search_text, search_text.c.rowid == Note.id)
             .where(Note.topic_id == topic_id).order_by(Note.id)
         ).all() if topic_id else []
+
         parent = LEVELS[kind].parent if kind is not None else None
         destinations = []
         if kind == Kind.topic:
@@ -159,13 +181,31 @@ def render_workspace(
                 for row in db.scalars(allowed)
                 if row.id != active.get(parent.value)
             ]
+
+        # 標籤：一次查詢取得所有可見標籤，另一次查詢取得該記事已掛標籤
         tags = list(db.scalars(select(Tag).where(visible_to(Tag, user_id)).order_by(Tag.name)))
         assigned_tags = []
         if isinstance(selection, Note):
+            # 可見標籤限制：擁有者或共用，且需能存取該記事
             visible_note_tags = notebook_items(Note, user_id).join(note_tags, note_tags.c.note_id == Note.id)
             query = visible_note_tags.join(Tag, Tag.id == note_tags.c.tag_id).where(Note.id == selection.id)
             assigned_tags = list(db.scalars(query.with_only_columns(Tag).order_by(Tag.name)))
         assigned_tag_ids = {tag.id for tag in assigned_tags}
+
+        # 附件：僅在選取記事時查詢
+        attachments = []
+        if isinstance(selection, Note):
+            attachments = list(db.scalars(notebook_items(Attachment, user_id).where(
+                Attachment.note_id == selection.id
+            ).order_by(Attachment.id)))
+
+        # 範本：僅在有主題或快速建立時查詢
+        note_templates = []
+        if topic_id or (new_note and selection is None):
+            note_templates = db.execute(select(Template.id, Template.name).where(
+                visible_to(Template, user_id)
+            ).order_by(Template.name)).all()
+
         return templates.TemplateResponse(
             request=request,
             name="workspace.html",
@@ -176,14 +216,10 @@ def render_workspace(
                 "quick_topics": [(row.id, title_path(row, Kind.topic, items)) for row in topics]
                 if new_note and selection is None else [],
                 "selection": selection, "kind": kind.value if kind else None,
-                "attachments": list(db.scalars(notebook_items(Attachment, user_id).where(
-                    Attachment.note_id == selection.id
-                ).order_by(Attachment.id))) if isinstance(selection, Note) else [],
+                "attachments": attachments,
                 "tags": tags, "assigned_tags": assigned_tags,
                 "available_tags": [tag for tag in tags if tag.id not in assigned_tag_ids],
-                "note_templates": db.execute(select(Template.id, Template.name).where(
-                    visible_to(Template, user_id)
-                ).order_by(Template.name)).all() if topic_id or (new_note and selection is None) else [],
+                "note_templates": note_templates,
                 "owns_notebook": owns_notebook,
                 "web_backup": db.get(User, 2) is None and user_id == 1,
                 "editor_content_format": selection.content_format if isinstance(selection, Note) else "plain",

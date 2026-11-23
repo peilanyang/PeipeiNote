@@ -71,7 +71,7 @@
     {% elif mode == 'tags' %}
       {% set editable = not item or item.owner_id == user_id %}
       <h2>標籤管理</h2>
-      <div class="tag-layout">
+      <div class="tag-layout" id="tag-layout">
         <section class="tag-panel" id="tag-form" aria-labelledby="tag-form-heading">
           {% if item %}
             <h3 id="tag-form-heading">{{ "編輯標籤" if editable else item.name }}</h3>
@@ -106,21 +106,98 @@
             </details>
           {% endif %}
         </section>
-        <section class="tag-panel" aria-labelledby="tags-list-heading">
+        <section class="tag-panel" aria-labelledby="tags-list-heading" id="tag-list-panel">
           <h3 id="tags-list-heading">標籤列表</h3>
-          <ul class="tag-list">
+          <ul class="tag-list" id="tag-list">
             {% for entry in items %}
-              <li class="tag-row{% if item and entry.id == item.id %} is-selected{% endif %}">
+              <li class="tag-row{% if item and entry.id == item.id %} is-selected{% endif %}" data-tag-id="{{ entry.id }}">
                 <a class="tag-row-title" href="/library/tags?selected={{ entry.id }}#tag-form"{% if item and entry.id == item.id %} aria-current="page"{% endif %}>{{ entry.name }}{% if entry.is_shared %} <span role="img" aria-label="家庭共用">👥</span>{% endif %}</a>
                 <span class="tag-actions">
-                  <a href="/library/search?tag={{ entry.id }}" aria-label="查看記事：{{ entry.name }}">查看記事</a>
+                  <button type="button" class="button-link tag-load-notes" data-tag-id="{{ entry.id }}" data-tag-name="{{ entry.name }}" aria-label="載入標籤文章：{{ entry.name }}">檢視文章</button>
                   {% if entry.owner_id == user_id %}<a href="/library/tags?selected={{ entry.id }}#tag-form" aria-label="編輯標籤：{{ entry.name }}">編輯</a>{% endif %}
                 </span>
               </li>
-            {% else %}<li class="muted">目前沒有標籤。</li>{% endfor %}
+            {% else %}
+              <li class="muted">目前沒有標籤。</li>
+              <li class="rule"><a class="button-link primary" href="/library/tags#tag-form">新增第一個標籤</a></li>
+            {% endfor %}
           </ul>
         </section>
+        <section class="tag-panel" aria-labelledby="tag-notes-heading" id="tag-notes-panel" hidden>
+          <div class="inline">
+            <h3 id="tag-notes-heading"></h3>
+            <button type="button" class="button-link" id="tag-notes-close" aria-label="關閉文章列表">關閉</button>
+          </div>
+          <div id="tag-notes-content" class="list"></div>
+        </section>
       </div>
+      <script>
+        // 標籤管理頁：點擊「檢視文章」以 AJAX 載入文章列表
+        document.addEventListener('DOMContentLoaded', function() {
+          const tagList = document.getElementById('tag-list');
+          const notesPanel = document.getElementById('tag-notes-panel');
+          const notesHeading = document.getElementById('tag-notes-heading');
+          const notesContent = document.getElementById('tag-notes-content');
+          const closeBtn = document.getElementById('tag-notes-close');
+
+          if (!tagList || !notesPanel) return;
+
+          tagList.addEventListener('click', function(e) {
+            const btn = e.target.closest('.tag-load-notes');
+            if (!btn) return;
+            e.preventDefault();
+            const tagId = btn.dataset.tagId;
+            const tagName = btn.dataset.tagName;
+            loadTagNotes(tagId, tagName);
+          });
+
+          if (closeBtn) {
+            closeBtn.addEventListener('click', function() {
+              notesPanel.hidden = true;
+              notesContent.innerHTML = '';
+              notesHeading.textContent = '';
+            });
+          }
+
+          function loadTagNotes(tagId, tagName) {
+            notesHeading.textContent = '標籤「' + tagName + '」的文章';
+            notesContent.innerHTML = '<p class="muted">載入中...</p>';
+            notesPanel.hidden = false;
+
+            fetch('/library/search?tag=' + encodeURIComponent(tagId) + '&partial=true', {
+              headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            })
+            .then(function(response) { return response.text(); })
+            .then(function(html) {
+              notesContent.innerHTML = html;
+              // 綁定分頁連結
+              notesContent.querySelectorAll('[data-search-page]').forEach(function(a) {
+                a.addEventListener('click', function(e) {
+                  e.preventDefault();
+                  notesContent.innerHTML = '<p class="muted">載入中...</p>';
+                  fetch(this.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                    .then(function(r) { return r.text(); })
+                    .then(function(h) { notesContent.innerHTML = h; });
+                });
+              });
+            })
+            .catch(function() {
+              notesContent.innerHTML = '<p class="muted">載入失敗，請重試。</p>';
+            });
+          }
+
+          // 若網址帶有 selected 參數，自動載入該標籤的文章
+          const urlParams = new URLSearchParams(window.location.search);
+          const selectedTag = urlParams.get('selected');
+          if (selectedTag) {
+            const row = tagList.querySelector('[data-tag-id="' + selectedTag + '"]');
+            if (row) {
+              const btn = row.querySelector('.tag-load-notes');
+              if (btn) btn.click();
+            }
+          }
+        });
+      </script>
     {% else %}
       {% set kind_label = '範本' %}
       {% set editable = not item or item.owner_id == user_id %}
@@ -130,7 +207,10 @@
           <li class="inline">
             <a href="/library/{{ mode }}?selected={{ entry.id }}"{% if item and entry.id == item.id %} aria-current="page"{% endif %}>{{ entry.name }}{% if entry.is_shared %} <span role="img" aria-label="家庭共用">👥</span>{% endif %}</a>
           </li>
-        {% else %}<li class="muted">目前沒有{{ kind_label }}。</li>{% endfor %}
+        {% else %}
+          <li class="muted">目前沒有{{ kind_label }}。</li>
+          <li class="rule"><a class="button-link primary" href="/library/{{ mode }}?selected=0">新增第一個{{ kind_label }}</a></li>
+        {% endfor %}
       </ul>
       {% if item %}<p class="rule"><a href="/library/{{ mode }}">新增{{ kind_label }}</a></p>{% endif %}
       {% if editable %}

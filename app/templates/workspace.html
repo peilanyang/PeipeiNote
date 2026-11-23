@@ -121,8 +121,8 @@
             </nav>
             <div class="note-top-actions">
               <nav class="note-exports" aria-label="記事匯出">
-                <a href="/export/notes/{{ selection.id }}.docx">匯出 Word</a>
-                <a href="/print/notes/{{ selection.id }}">列印／另存 PDF</a>
+                <a href="/export/notes/{{ selection.id }}.docx" class="export-btn" data-export-format="docx">匯出 Word</a>
+                <a href="/print/notes/{{ selection.id }}" class="export-btn" data-export-format="pdf">列印／另存 PDF</a>
               </nav>
               <div class="note-save-feedback">
                 <span id="note-save-status" role="status">已儲存</span>
@@ -272,5 +272,25 @@
       {% endif %}
     </section>
   </main>
+  <script>
+    // 匯出 Word/PDF 載入狀態
+    document.addEventListener('DOMContentLoaded', function() {
+      document.querySelectorAll('.export-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          const format = this.dataset.exportFormat || 'docx';
+          const originalText = this.textContent;
+          this.textContent = format === 'docx' ? '產生 Word 中...' : '開啟列印中...';
+          this.classList.add('loading');
+          this.setAttribute('aria-busy', 'true');
+          // 若導向列印頁，仍需恢復按鈕狀態（使用 beforeunload 無法可靠觸發，這裡以計時器為備援）
+          setTimeout(function() {
+            btn.textContent = originalText;
+            btn.classList.remove('loading');
+            btn.removeAttribute('aria-busy');
+          }, 8000);
+        });
+      });
+    });
+  </script>
 </body>
 </html>
