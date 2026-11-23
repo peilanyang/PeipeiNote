@@ -11,7 +11,7 @@
 | **P0 立即修復（資安/嚴重邏輯）** | 1 | ✅ 完成 |
 | **P1 核心效能/資料完整性** | 3 | ✅ 3 完成 |
 | **P2 使用體驗明顯改善** | 2 | ✅ 2 完成 |
-| **P3 細節打磨** | 2 | ✅ 1 完成 / ☐ 進行中 / ☐ 完成 |
+| **P3 細節打磨** | 2 | ✅ 2 完成 |
 | **P4 架構評估/重構** | 1 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 
 ---
@@ -171,16 +171,55 @@
 - **JavaScript 行為測試**：
   - `tests/js/export_loading_harness.js`（新增）：以最小 DOM 模擬實際載入 `export-loading.js` 並跑一次完整點擊流程，驗證停用、忙碌標記、等待真實回應、檔名淨化與失敗提示。此測試由 pytest 驅動，環境沒有 node 時會自動略過。
 
-### P3-2 手機版編輯器工具列虛擬鍵盤適配
+### P3-2 手機版編輯器工具列虛擬鍵盤適配 ✅
 - **現況**：手機鍵盤彈出時，`sticky` 底部工具列可能被遮擋或浮在鍵盤上方
 - **目標**：使用 `visualViewport` API 動態調整工具列 `bottom`，或改 `position: fixed; bottom: env(keyboard-inset-height, 0)`
-- **修正檔案**：
-  - `app/static/workspace.css`：新增 `@supports (bottom: env(keyboard-inset-height))` 規則
-  - `editor.bundle.js`：監聽 `visualViewport.onresize` 更新工具列位置
+- **規格落差修正**：
+  - 修正檔案清單原定修改 `editor.bundle.js`，但該檔是第三方 TipTap 3.34.0 的壓縮 vendored 套件（專案沒有 package.json、沒有前端建置流程），直接改它會在升級時遺失且無法審閱；改以獨立檔 `app/static/editor-viewport.js` 實作，兩邊互不干擾。
+  - 原定的 `visualViewport.onresize` 並非真實 API（`visualViewport` 只有 `addEventListener('resize'|'scroll')`），已改用真實事件。
+  - `env(keyboard-inset-height)` 目前沒有任何正式瀏覽器實作，只能當未來-proof 的漸進增強，主力仍是 `visualViewport` 量測；兩者同時存在時取較大值。
+- **實作內容**：
+  - `app/static/editor-viewport.js`（新增）：監聽 `visualViewport` 的 `resize`/`scroll` 與 `window` 的 `resize`/`orientationchange`，以 `max(0, window.innerHeight − visualViewport.height − visualViewport.offsetTop)` 算出鍵盤佔用高度並寫入根元素的 `--keyboard-inset`；另以 `ResizeObserver` 量測工具列高度寫入 `--toolbar-height`（量不到就移除變數，讓樣式表使用預設值）。所有數值都經過 `Number.isFinite` 與 `Math.max(0, …)` 夾制，NaN／負值／非數字一律視為「沒有鍵盤」。
+  - `app/static/workspace.css`：手機版（`max-width: 640px`）工具列由 `position: sticky` 改為 `position: fixed; bottom: var(--keyboard-inset, 0px)`；刪除 `focus-within { position: static }`（原本讓工具列在「打字時」整個消失，直接違反驗收條件 1）；補上 `padding-inline` 讓固定後的工具列不貼齊螢幕邊緣；新增 `.note-form { padding-bottom: calc(var(--toolbar-height, 3.25rem) + 1rem) }` 內容補償；安全區內距改為扣掉鍵盤高度避免重複計算；新增 `@supports (bottom: env(keyboard-inset-height))` 規則取兩者較大值。
+  - `app/templates/note_editor.html`：加入 `<script defer src="/static/editor-viewport.js"></script>`（工作區與範本／標籤管理頁共用同一個 include，兩頁同時生效）。
+- **降級策略**：
+  - 沒有 JavaScript 時 `--keyboard-inset` 無值，工具列以 `bottom: 0` 貼齊畫面底部、內容補償退回預設 `3.25rem`，功能不會壞掉。
+  - 沒有 `visualViewport`（舊版瀏覽器）時靜靜退回貼齊底部；沒有 `ResizeObserver` 時工具列高度交由樣式表預設值，兩者都不會拋出例外。
+  - 桌面版（>640px）完全沿用原本的 `sticky` 定位，樣式改動全部包在 `@media (max-width: 640px)` 內。
 - **驗收**：
-  1. iOS Safari / Android Chrome 實測：輸入中工具列始終可見、不遮擋內容
-  2. 橫向/直向切換正常
-  3. 桌面版無副作用
+  1. 手機輸入時工具列固定在鍵盤上緣、輸入中不會消失 ✅（刪除 focus-within hack ＋ `position: fixed` ＋ `--keyboard-inset`）
+  2. 橫向／直向切換：`orientationchange` 與 `resize` 都會重算 ✅
+  3. 桌面版無副作用：`position: fixed` 全檔只出現在手機版媒體區塊，桌面規則逐字未動 ✅
+  4. 工具列不再壓住最後一段內容（等高空白補償）✅
+  5. `pytest tests/` 全測試 97 通過 ✅
+  6. `bandit -r app/` 零風險 ✅
+- **新增測試**：
+  - `test_workspace_page_loads_the_viewport_script`
+  - `test_library_page_loads_the_viewport_script`
+  - `test_viewport_script_is_served_as_javascript`
+  - `test_viewport_script_does_not_replace_the_editor_bundle`
+  - `test_mobile_toolbar_is_fixed_and_uses_the_keyboard_inset`
+  - `test_mobile_toolbar_no_longer_sticks_to_the_bottom`
+  - `test_focus_within_static_position_removed`
+  - `test_desktop_toolbar_rules_are_untouched`
+  - `test_mobile_content_reserves_room_for_the_fixed_toolbar`
+  - `test_safe_area_padding_does_not_double_count_the_keyboard`
+  - `test_fixed_toolbar_keeps_its_content_off_the_screen_edge`
+  - `test_fixed_position_is_only_used_on_small_screens`
+  - `test_keyboard_inset_environment_fallback_is_applied`
+  - `test_viewport_script_has_no_injection_or_network_channels`
+  - `test_viewport_script_clamps_sizes_before_writing_css`
+  - `test_keyboard_inset_is_written_when_the_keyboard_opens`
+  - `test_keyboard_inset_returns_to_zero_when_the_keyboard_closes`
+  - `test_visual_viewport_scroll_updates_the_keyboard_inset`
+  - `test_toolbar_height_is_published_from_the_resize_observer`
+  - `test_rotation_recalculates_the_keyboard_inset`
+  - `test_malformed_viewport_sizes_never_produce_invalid_css_values`
+  - `test_unmeasurable_toolbar_height_removes_the_css_variable`
+  - `test_toolbar_mounted_after_the_script_is_still_measured`
+  - `test_old_browsers_fall_back_without_raising_errors`
+- **JavaScript 行為測試**：
+  - `tests/js/editor_viewport_harness.js`（新增）：以最小 DOM 模擬實際載入 `editor-viewport.js`，觸發鍵盤彈出／收起、可視區域捲動、旋轉、工具列尺寸變化與惡意尺寸（負值／NaN／Infinity／非數字），驗證 CSS 變數數值正確且不會寫出無效樣式值。此測試由 pytest 驅動，環境沒有 node 時會自動略過。
 
 ---
 
@@ -245,6 +284,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.5 | P2-1 完成：標籤管理頁內嵌記事列表（`manage()` 新增 `tag_notes` 分頁查詢、`library.html` 伺服端渲染並移除 AJAX、三欄響應式版面） |
 | 2026-11-23 | 1.6 | P2-2 完成：空狀態加入 CTA 引導（主題無記事新增「新增第一則記事」按鈕、搜尋無結果的「新增記事」改用可用的 `/?new_note=true`、標籤分支一併補上） |
 | 2026-11-23 | 1.7 | P3-1 完成：匯出 Word 加入載入狀態（新增 `/static/export-loading.js`，按下後 `disabled` + `aria-busy` + 「產生中…」，改以 `fetch` 取回完整回應後才觸發 blob 下載；降級連結常駐 DOM，無 JavaScript 或程式檔載入失敗時仍可直接下載） |
+| 2026-11-23 | 1.8 | P3-2 完成：手機版編輯器工具列虛擬鍵盤適配（新增 `/static/editor-viewport.js`，以 `visualViewport` 量測鍵盤高度寫入 `--keyboard-inset`；手機版工具列改用 `position: fixed` 並刪除會讓工具列在打字時消失的 `focus-within` hack，補上內容與安全區補償；桌面版樣式不動） |
 
 ---
 

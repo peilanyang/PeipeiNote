@@ -4,3 +4,4 @@
             <textarea id="note-content" name="content" maxlength="100000"{% if editor_placeholder %} aria-label="內容" placeholder="{{ editor_placeholder }}"{% endif %}{% if editor_content_format == 'html' %} readonly{% endif %}>
 {{ editor_content }}</textarea>
             <script defer src="/static/editor.bundle.js"></script>
+            <script defer src="/static/editor-viewport.js"></script>

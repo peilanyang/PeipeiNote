@@ -7,26 +7,33 @@
 .export-status{color:#86272a;font-size:.83rem}
 .export-status:empty{display:none}
 
-/* 手機版編輯器工具列固定在底部，避免被虛擬鍵盤遮擋 */
+/* 手機版編輯器工具列固定在底部，避免被虛擬鍵盤遮擋；
+   鍵盤佔用的高度由 app/static/editor-viewport.js 量測後以 --keyboard-inset 提供。 */
 @media (max-width: 640px) {
   .note-form .rich-toolbar {
-    position: sticky;
-    bottom: 0;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: var(--keyboard-inset, 0px);
     z-index: 10;
     background: var(--bar);
     border-top: 1px solid var(--line);
     border-bottom: 0;
     box-shadow: 0 -4px 12px #2822391a;
-    padding-bottom: max(.55rem, env(safe-area-inset-bottom));
+    /* 固定後脫出面板版心，左右補上與面板相同的內距，工具列才不會貼齊螢幕邊緣 */
+    padding-inline: clamp(1rem, 2.4vw, 2rem);
+    padding-bottom: max(.55rem, calc(env(safe-area-inset-bottom, 0px) - var(--keyboard-inset, 0px)));
   }
-  .note-form .rich-toolbar:focus-within {
-    position: static;
+  /* 內容補償：工具列固定後不再佔據版面，補上等高空白避免壓住最後一段內容 */
+  .note-form {
+    padding-bottom: calc(var(--toolbar-height, 3.25rem) + 1rem);
   }
 }
-@supports (padding-bottom: env(safe-area-inset-bottom)) {
+/* 未來-proof：若瀏覽器實作 keyboard-inset-height，取兩者較大值避免重複計算 */
+@supports (bottom: env(keyboard-inset-height)) {
   @media (max-width: 640px) {
     .note-form .rich-toolbar {
-      padding-bottom: max(.55rem, env(safe-area-inset-bottom));
+      bottom: max(var(--keyboard-inset, 0px), env(keyboard-inset-height, 0px));
     }
   }
 }
