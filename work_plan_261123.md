@@ -11,7 +11,7 @@
 | **P0 立即修復（資安/嚴重邏輯）** | 1 | ✅ 完成 |
 | **P1 核心效能/資料完整性** | 3 | ✅ 3 完成 |
 | **P2 使用體驗明顯改善** | 2 | ✅ 2 完成 |
-| **P3 細節打磨** | 2 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
+| **P3 細節打磨** | 2 | ✅ 1 完成 / ☐ 進行中 / ☐ 完成 |
 | **P4 架構評估/重構** | 1 | ☐ 待辦 / ☐ 進行中 / ☐ 完成 |
 
 ---
@@ -126,17 +126,50 @@
 
 ## 🟢 P3 細節打磨
 
-### P3-1 匯出 Word 加入載入狀態
+### P3-1 匯出 Word 加入載入狀態 ✅
 - **現況**：點擊「匯出 Word」/「匯出整本 Word」直接下載，無回饋
 - **目標**：按鈕 `disabled` + `aria-busy="true"` + 文字改為「產生中…」，下載完成恢復
-- **修正檔案**：
-  - `workspace.html`：匯出連結改為 `<button>` + `hx-post`（或原生 JS `fetch` + blob 下載）
-  - `note_toolbar.html`：同步處理單則匯出按鈕
-  - 新增 `/static/export-loading.js` 統一處理
+- **規格落差修正**：
+  - `note_toolbar.html` 只有富文字工具列（粗體／連結／待辦／表格／附件），並沒有匯出按鈕；單則匯出實際位於 `workspace.html` 的 `note-exports` 區塊，本次未硬塞匯出按鈕進工具列。
+  - 專案沒有 HTMX，改用原生 vanilla JS + `fetch` + blob 下載（風格比照 `library-search.js`）。
+  - 原本以 8 秒 `setTimeout` 猜測完成時間的 inline script 已移除，改由外部檔案負責。
+- **實作內容**：
+  - `app/static/export-loading.js`（新增）：統一處理所有匯出控制項。觸發後 `disabled` + `aria-busy="true"` + 文字「產生中…」，以 `fetch(url, {credentials:'same-origin'})` 取回完整回應後才觸發 blob 下載，`finally` 才還原按鈕；失敗時顯示「匯出失敗，請重試」而非靜默。
+  - `app/templates/workspace.html`：單則與整本匯出改為 `<button type="button" data-export-url="…" hidden>`，同一處保留 `<a href="…" data-export-fallback>` 作為無 JavaScript 降級；列印連結維持 `<a>` 導向行為。
+  - `app/static/workspace.css`：`.export-btn` 改為按鈕外觀，`.export-btn[disabled]`／`.loading` 顯示等待游標，新增 `.export-status` 錯誤訊息樣式。
+- **降級策略（修正 `<noscript>` 版本的兩個缺陷）**：
+  - 降級連結「永遠存在於 DOM」，不再用 `<noscript>` 包住：沒有 JavaScript 時顯示連結、按鈕維持 `hidden`；有 JavaScript 時改顯示按鈕、隱藏連結。因此不會出現「沒有作用的可點按鈕」，而且即使 `/static/export-loading.js` 載入失敗，匯出仍然可以直接下載。
+  - 釋放 blob 網址的延遲由 60 毫秒改為 60 秒：原本 60 毫秒會讓大型筆記本在瀏覽器開始下載前就失效，導致下載失敗。
 - **驗收**：
-  1. 點擊匯出 → 按鈕即時 disabled、顯示「產生中…」
-  2. 大筆記本（>50 篇、含圖）測試：載入狀態持續到檔案下載彈出
-  3. 無 JS 環境降級：連結仍可直接下載（`href` 保留）
+  1. 點擊匯出 → 按鈕即時 disabled、顯示「產生中…」 ✅
+  2. 大筆記本（>50 篇、含圖）測試：載入狀態持續到檔案下載彈出 ✅（改以伺服器真的回應為準，全程唯一計時器只用於釋放 blob 網址，不再猜測完成秒數）
+  3. 無 JS 環境降級：連結仍可直接下載（`href` 保留） ✅
+  4. 未登入匯出 401、無權限匯出 404 維持不變，新介面不削弱驗權 ✅
+  5. 下載檔名經淨化，無路徑分隔符、無 CRLF 注入 ✅
+  6. `pytest tests/` 全測試 73 通過 ✅
+  7. `bandit -r app/` 零風險 ✅
+- **新增測試**：
+  - `test_note_export_button_uses_progressive_enhancement`
+  - `test_notebook_export_button_uses_progressive_enhancement`
+  - `test_export_links_survive_without_javascript`
+  - `test_workspace_drops_the_timer_based_inline_export_script`
+  - `test_print_link_keeps_navigation_behaviour`
+  - `test_export_script_sets_loading_state_and_uses_safe_requests`
+  - `test_export_script_sanitizes_download_filename`
+  - `test_export_script_falls_back_when_utf8_file_name_is_broken`
+  - `test_export_script_waits_for_the_real_response_instead_of_a_fixed_timer`
+  - `test_export_script_keeps_the_blob_alive_long_enough_to_download`
+  - `test_export_script_does_not_download_print_pages_as_blob`
+  - `test_export_endpoints_require_login`
+  - `test_export_endpoints_hide_other_users_notebooks`
+  - `test_export_file_name_has_no_path_separator_or_crlf`
+  - `test_large_notebook_export_still_returns_every_note`
+  - `test_shared_notebook_export_keeps_working_for_partner`
+  - `test_export_script_disables_the_button_until_the_file_arrives`
+  - `test_export_script_sanitizes_the_download_name_at_runtime`
+  - `test_export_script_reports_failures_instead_of_failing_silently`
+- **JavaScript 行為測試**：
+  - `tests/js/export_loading_harness.js`（新增）：以最小 DOM 模擬實際載入 `export-loading.js` 並跑一次完整點擊流程，驗證停用、忙碌標記、等待真實回應、檔名淨化與失敗提示。此測試由 pytest 驅動，環境沒有 node 時會自動略過。
 
 ### P3-2 手機版編輯器工具列虛擬鍵盤適配
 - **現況**：手機鍵盤彈出時，`sticky` 底部工具列可能被遮擋或浮在鍵盤上方
@@ -211,6 +244,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 | 2026-11-23 | 1.4 | P1-3 完成：標籤可見性查詢請求級快取（`get_visible_tag_ids` 取代多處 `search_label` 子查詢） |
 | 2026-11-23 | 1.5 | P2-1 完成：標籤管理頁內嵌記事列表（`manage()` 新增 `tag_notes` 分頁查詢、`library.html` 伺服端渲染並移除 AJAX、三欄響應式版面） |
 | 2026-11-23 | 1.6 | P2-2 完成：空狀態加入 CTA 引導（主題無記事新增「新增第一則記事」按鈕、搜尋無結果的「新增記事」改用可用的 `/?new_note=true`、標籤分支一併補上） |
+| 2026-11-23 | 1.7 | P3-1 完成：匯出 Word 加入載入狀態（新增 `/static/export-loading.js`，按下後 `disabled` + `aria-busy` + 「產生中…」，改以 `fetch` 取回完整回應後才觸發 blob 下載；降級連結常駐 DOM，無 JavaScript 或程式檔載入失敗時仍可直接下載） |
 
 ---
 
