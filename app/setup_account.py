@@ -94,7 +94,11 @@ def main() -> None:
         # 完整寫入暫存檔後才取代設定，避免中斷時留下半組帳號。
         with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".env.", delete=False) as config:
             temporary = Path(config.name)
-            config.write(existing.rstrip("\n") + f"\nPARTNER_USERNAME={username}\nPARTNER_PASSWORD_HASH={password_hash}\n")
+            config.write(
+                existing.rstrip("\n")
+                + f"\nPARTNER_USERNAME={username}\n"
+                + f"PARTNER_PASSWORD_HASH={password_hash}\n"
+            )
         try:
             if path.read_text(encoding="utf-8") != existing:
                 raise SystemExit("設定已被其他程序修改，請重跑指令。")

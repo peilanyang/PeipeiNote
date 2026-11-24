@@ -61,7 +61,9 @@ def valid_docx(archive: ZipFile) -> bool:
         types.tag == types_ns + "Types"
         and any(
             node.get("PartName") == "/word/document.xml"
-            and node.get("ContentType") == "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+            and node.get("ContentType") == (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+            )
             for node in types.iterchildren(types_ns + "Override")
         )
         and rels.tag == rels_ns + "Relationships"
@@ -171,6 +173,7 @@ def attachment_routes(engine: Engine, settings: Settings, uploads: Path) -> APIR
         user_id = await run_in_threadpool(require_user, engine, settings, request, write=True)
         if not 0 < note_id < 2**63:
             raise HTTPException(404, "找不到這則記事。")
+
         # 先查權限再接收資料，真正寫檔前在交易中重查。
         def check_note() -> None:
             # 上傳之前只確認記事存在且屬於目前帳號可用的筆記本。

@@ -33,7 +33,10 @@ def accounts() -> tuple[auth.Settings, dict[str, str], dict[str, str]]:
 
 
 @pytest.fixture
-def family(tmp_path: Path, accounts: tuple[auth.Settings, dict[str, str], dict[str, str]]) -> Iterator[tuple[TestClient, TestClient]]:
+def family(
+    tmp_path: Path,
+    accounts: tuple[auth.Settings, dict[str, str], dict[str, str]],
+) -> Iterator[tuple[TestClient, TestClient]]:
     # 兩個瀏覽器各自登入，使用同一個實際應用程式與測試資料庫。
     settings, a_credentials, b_credentials = accounts
     app = create_app(settings, tmp_path / "family.db")
@@ -182,6 +185,7 @@ def test_sharing_grants_and_revokes_content_and_attachment_access(family: tuple[
 
     first = note_version(a.get(note_url).text)
     assert note_version(b.get(note_url).text) == first
+
     def save(client: TestClient, name: str) -> tuple[str, int]:
         # 同時從兩個帳號提交同一個版本。
         result = client.post(f"/workspace/note/{note}/save", headers={**HEADERS, "Accept": "application/json"},
@@ -254,7 +258,12 @@ def test_shared_template_and_tag_can_be_used_but_only_owner_manages_them(family:
     assert "私人副本" not in b.get(f"/library/search?tag={tag}").text
     for kind, record in (("tags", tag), ("templates", template)):
         assert a.get(f"/library/{kind}?selected={record}").status_code == 200
-        assert a.post(f"/library/{kind}", data={"record_id": record, "action": "delete"}, headers=HEADERS).status_code == 404
+        response = a.post(
+            f"/library/{kind}",
+            data={"record_id": record, "action": "delete"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 404
     submit(b, "/library/templates", record_id=template, name="家庭範本", content="共用範本文字", is_shared="false")
     assert a.get(f"/library/templates?selected={template}").status_code == 404
     assert "共用範本文字" in a.get(note_url).text
@@ -269,15 +278,23 @@ def test_legacy_database_preserves_notes_tags_templates_and_files(
     with closing(sqlite3.connect(database)) as db:
         db.executescript("""
             CREATE TABLE notebooks (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL);
-            CREATE TABLE topic_lists (id INTEGER PRIMARY KEY, notebook_id INTEGER REFERENCES notebooks(id), name VARCHAR);
-            CREATE TABLE topics (id INTEGER PRIMARY KEY, topic_list_id INTEGER REFERENCES topic_lists(id), name VARCHAR);
-            CREATE TABLE notes (id INTEGER PRIMARY KEY, topic_id INTEGER REFERENCES topics(id), title VARCHAR, content VARCHAR);
+            CREATE TABLE topic_lists (id INTEGER PRIMARY KEY,
+                                       notebook_id INTEGER REFERENCES notebooks(id),
+                                       name VARCHAR);
+            CREATE TABLE topics (id INTEGER PRIMARY KEY,
+                                 topic_list_id INTEGER REFERENCES topic_lists(id),
+                                 name VARCHAR);
+            CREATE TABLE notes (id INTEGER PRIMARY KEY,
+                                topic_id INTEGER REFERENCES topics(id),
+                                title VARCHAR, content VARCHAR);
             CREATE TABLE tags (id INTEGER PRIMARY KEY, name VARCHAR UNIQUE NOT NULL);
-            CREATE TABLE note_tags (note_id INTEGER REFERENCES notes(id), tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
+            CREATE TABLE note_tags (note_id INTEGER REFERENCES notes(id),
+                                    tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
                                     PRIMARY KEY(note_id, tag_id));
             CREATE TABLE templates (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, content VARCHAR NOT NULL);
             CREATE TABLE attachments (id INTEGER PRIMARY KEY, note_id INTEGER REFERENCES notes(id),
-                                      original_name VARCHAR, storage_name VARCHAR UNIQUE, media_type VARCHAR, size_bytes INTEGER);
+                                      original_name VARCHAR, storage_name VARCHAR UNIQUE,
+                                      media_type VARCHAR, size_bytes INTEGER);
             CREATE TABLE login_sessions (digest VARCHAR PRIMARY KEY, expires_at INTEGER);
             INSERT INTO notebooks VALUES (10, '舊筆記本');
             INSERT INTO topic_lists VALUES (20, 10, '舊清單');

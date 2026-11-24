@@ -113,11 +113,16 @@ def create_app(settings: Settings, db_path: Path) -> FastAPI:
     def login_page() -> HTMLResponse:
         # 只有完成本機設定才開放登入表單。
         if not settings.configured:
-            return page("初始化帳號", "<p>請先執行帳號設定指令，再重新啟動 PeipeiNote。</p><p><code>.venv/Scripts/python.exe -m app.setup_account</code></p>", 503)
+            message = (
+                "<p>請先執行帳號設定指令，再重新啟動 PeipeiNote。</p>"
+                "<p><code>.venv/Scripts/python.exe -m app.setup_account</code></p>"
+            )
+            return page("初始化帳號", message, 503)
         return page("登入", """<h2>登入</h2>
 <form method="post" action="/login">
   <p><label>帳號 <input name="username" autocomplete="username" maxlength="128" required></label></p>
-  <p><label>密碼 <input type="password" name="password" autocomplete="current-password" maxlength="1024" required></label></p>
+  <p><label>密碼 <input type="password" name="password"
+                        autocomplete="current-password" maxlength="1024" required></label></p>
   <button type="submit">登入</button>
 </form>""")
 

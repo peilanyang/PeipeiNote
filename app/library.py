@@ -90,7 +90,10 @@ def library_routes(engine: Engine, settings: Settings) -> APIRouter:
                 get_item(db, Kind.notebook, book, user_id)
             # 使用快取的可見標籤 ID，避免重複執行 search_label 子查詢
             visible_tag_ids = get_visible_tag_ids(db, user_id)
-            label = db.scalar(select(Tag).where(Tag.id == tag, Tag.id.in_(visible_tag_ids))) if tag is not None else None
+            label = (
+                db.scalar(select(Tag).where(Tag.id == tag, Tag.id.in_(visible_tag_ids)))
+                if tag is not None else None
+            )
             if tag is not None and label is None:
                 raise HTTPException(404, "找不到這個標籤。")
             active = bool(query or label)

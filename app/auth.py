@@ -112,7 +112,9 @@ def authenticate(
     if not PASSWORD_CHECK_SLOTS.acquire(blocking=False):
         return None, 1
     try:
-        partner = settings.partner_enabled and hmac.compare_digest(settings.partner_username.encode(), username.encode())
+        partner = settings.partner_enabled and hmac.compare_digest(
+            settings.partner_username.encode(), username.encode()
+        )
         user_id = 2 if partner else 1
         password_hash = settings.partner_password_hash if partner else settings.password_hash
         try:
@@ -139,7 +141,11 @@ def authenticate(
                 db.delete(attempt)
             db.execute(delete(LoginSession).where(LoginSession.expires_at <= now))
             token = secrets.token_urlsafe(32)
-            db.add(LoginSession(digest=session_digest(settings, token), expires_at=now + COOKIE_SECONDS, user_id=user_id))
+            db.add(LoginSession(
+                digest=session_digest(settings, token),
+                expires_at=now + COOKIE_SECONDS,
+                user_id=user_id,
+            ))
             return token, 0
 
         if attempt is None:

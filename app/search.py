@@ -51,7 +51,10 @@ def initialize_search(engine: Engine) -> None:
         already_indexed = conn.exec_driver_sql(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'note_search'"
         ).scalar()
-        conn.exec_driver_sql("CREATE VIRTUAL TABLE IF NOT EXISTS note_search USING fts5(title, body, tokenize='trigram')")
+        conn.exec_driver_sql(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS note_search "
+            "USING fts5(title, body, tokenize='trigram')"
+        )
         conn.exec_driver_sql("""
             CREATE TRIGGER IF NOT EXISTS notes_search_insert AFTER INSERT ON notes BEGIN
                 INSERT INTO note_search(rowid, title, body)
@@ -59,7 +62,8 @@ def initialize_search(engine: Engine) -> None:
             END
         """)
         conn.exec_driver_sql("""
-            CREATE TRIGGER IF NOT EXISTS notes_search_update AFTER UPDATE OF title, content, content_format ON notes BEGIN
+            CREATE TRIGGER IF NOT EXISTS notes_search_update
+            AFTER UPDATE OF title, content, content_format ON notes BEGIN
                 DELETE FROM note_search WHERE rowid = old.id;
                 INSERT INTO note_search(rowid, title, body)
                 VALUES (new.id, new.title, peipeinote_text(new.content, new.content_format));
@@ -121,7 +125,8 @@ def search_rows(
     # 多詞為 AND 語意：舊「含空格的連續片段」搜尋結果必然是新結果的子集，不會遺漏舊可搜到的記事。
     clauses, term_params = search_clauses(query)
     condition = " AND (" + " AND ".join(clauses) + ")" if clauses else ""
-    statement = text(SEARCH_SELECT + condition + " ORDER BY n.id DESC LIMIT :limit OFFSET :offset").columns(updated_at=DateTime())
+    sql = SEARCH_SELECT + condition + " ORDER BY n.id DESC LIMIT :limit OFFSET :offset"
+    statement = text(sql).columns(updated_at=DateTime())
     rows = db.execute(statement, {
         "user_id": user_id, "book": book, "tag": tag,
         **term_params,

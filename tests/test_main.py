@@ -157,6 +157,7 @@ def test_private_paths_are_not_exposed(client: TestClient, method: str, path: st
     # 確認公開註冊、機密設定、上傳路徑及 API 文件均未開放。
     assert client.request(method, path).status_code == 404
 
+
 def note_version(html: str) -> str:
     # 像瀏覽器一樣使用頁面載入時拿到的記事版本。
     match = re.search(r'name="version" value="([^"]+)"', html)
@@ -290,7 +291,10 @@ def test_backup_contains_a_consistent_snapshot_without_secrets(
         assert database.execute("PRAGMA quick_check").fetchone() == ("ok",)
         assert database.execute("SELECT title, content FROM notes").fetchone() == ("有備份", "重要記事")
         assert database.execute("SELECT storage_name FROM attachments").fetchone() == (file_id,)
-        assert database.execute("SELECT title FROM note_search WHERE note_search MATCH ?", ("重要記事",)).fetchone() == ("有備份",)
+        row = database.execute(
+            "SELECT title FROM note_search WHERE note_search MATCH ?", ("重要記事",)
+        ).fetchone()
+        assert row == ("有備份",)
     assert not list(uploads.glob(".backup-*"))
 
 
@@ -403,7 +407,12 @@ def test_workspace_guards_mutations_and_preserves_children(
     # 未登入、跨來源、未確認刪除與無效的父層都不能寫入資料。
     assert client.post("/workspace/notebook", data={"name": "測試筆記本"}, headers={"Origin": ORIGIN}).status_code == 401
     submit(client, "/login", **credentials)
-    assert client.post("/workspace/notebook", data={"name": "跨站"}, headers={"Origin": "https://elsewhere.test"}).status_code == 403
+    response = client.post(
+        "/workspace/notebook",
+        data={"name": "跨站"},
+        headers={"Origin": "https://elsewhere.test"},
+    )
+    assert response.status_code == 403
     book = submit(client, "/workspace/notebook", name="原有筆記本")
     submit(client, "/workspace/section", name="要保留的清單", parent_id=1)
     submit(client, "/workspace/topic", name="要保留的主題", notebook_id=1)
@@ -522,7 +531,10 @@ def test_private_attachments_lifecycle(
     assert client.post(upload, headers={"X-Filename": "file.txt"}, content=b"hey").status_code == 403
     with monkeypatch.context() as limits:
         limits.setattr(attachments, "MAX_FILE_BYTES", 3)
-        assert client.post(upload, content=b"four", headers={**headers, "X-Filename": quote("file.txt")}).status_code == 413
+        response = client.post(
+            upload, content=b"four", headers={**headers, "X-Filename": quote("file.txt")}
+        )
+        assert response.status_code == 413
     image = BytesIO()
     Image.new("RGB", (2, 2)).save(image, format="PNG")
     picture = client.post(upload, content=image.getvalue(), headers={**headers, "X-Filename": quote("圖片.png")})
@@ -610,7 +622,12 @@ def test_search_tags_and_template_workflow(client: TestClient, credentials: dict
     note = submit(client, "/workspace/note", parent_id=1, name="北方之旅", template_id=1)
     assert "&lt;h2&gt;行程規劃&lt;/h2&gt;" in client.get(note).text
     assert "內嵌圖片和附件不會複製" in client.get(note).text
-    assert client.post("/workspace/note", data={"parent_id": 1, "name": "錯誤", "template_id": 99}, headers=headers).status_code == 404
+    response = client.post(
+        "/workspace/note",
+        data={"parent_id": 1, "name": "錯誤", "template_id": 99},
+        headers=headers,
+    )
+    assert response.status_code == 404
     submit(client, "/workspace/note", parent_id=2, name="假期準備", template_id="")
     submit(client, "/workspace/note/2/save", name="假期準備", content='行前記事：搭飛機到北海道。查找 "登機門"。')
     for _ in range(2):

@@ -260,7 +260,11 @@ def word_response(writer: WordWriter, title: str) -> Response:
 def notebook_outline(db: Session, notebook_id: int) -> list[Entry]:
     # 將既有主題直接列在筆記本目錄中，空主題也保留。
     topics = db.scalars(select(Topic).join(TopicList).where(TopicList.notebook_id == notebook_id).order_by(Topic.id))
-    notes = db.scalars(select(Note).join(Topic).join(TopicList).where(TopicList.notebook_id == notebook_id).order_by(Note.id))
+    notes = db.scalars(
+        select(Note).join(Topic).join(TopicList)
+        .where(TopicList.notebook_id == notebook_id)
+        .order_by(Note.id)
+    )
     notes_by_topic: dict[int, list[Note]] = {}
     for note in notes:
         notes_by_topic.setdefault(note.topic_id, []).append(note)
@@ -297,7 +301,10 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
         user_id = require_user(engine, settings, request)
         with Session(engine, expire_on_commit=False) as db, db.begin():
             db.connection().exec_driver_sql("BEGIN")
-            notebook = db.scalar(notebook_items(Notebook, user_id).where(Notebook.id == notebook_id)) if 0 < notebook_id < 2**63 else None
+            notebook = (
+                db.scalar(notebook_items(Notebook, user_id).where(Notebook.id == notebook_id))
+                if 0 < notebook_id < 2**63 else None
+            )
             if notebook is None:
                 raise HTTPException(404, "找不到這本筆記本。")
             outline = notebook_outline(db, notebook_id)
@@ -335,7 +342,10 @@ def export_routes(engine: Engine, settings: Settings, uploads: Path) -> APIRoute
                 context={"note": note, "rich": rich, "body": clean_html(note.content) if rich else note.content},
                 headers={
                     **PRIVATE_HEADERS,
-                    "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+                    "Content-Security-Policy": (
+                        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
+                        "script-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+                    ),
                 },
             )
 

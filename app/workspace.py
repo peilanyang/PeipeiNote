@@ -177,11 +177,16 @@ def render_workspace(
 
         # 標籤：使用快取的可見標籤 ID，避免重複執行子查詢
         visible_tag_ids = get_visible_tag_ids(db, user_id)
-        tags = list(db.scalars(select(Tag).where(Tag.id.in_(visible_tag_ids)).order_by(Tag.name))) if visible_tag_ids else []
+        tags = (
+            list(db.scalars(select(Tag).where(Tag.id.in_(visible_tag_ids)).order_by(Tag.name)))
+            if visible_tag_ids else []
+        )
         assigned_tags = []
         if isinstance(selection, Note):
             # 可見標籤限制：擁有者或共用，且需能存取該記事
-            visible_note_tags = notebook_items(Note, user_id).join(note_tags, note_tags.c.tag_id == Tag.id).where(Note.id == selection.id)
+            visible_note_tags = notebook_items(Note, user_id).join(
+                note_tags, note_tags.c.tag_id == Tag.id
+            ).where(Note.id == selection.id)
             query = visible_note_tags.join(Tag, Tag.id == note_tags.c.tag_id).where(Note.id == selection.id)
             assigned_tags = list(db.scalars(query.with_only_columns(Tag).order_by(Tag.name)))
         assigned_tag_ids = {tag.id for tag in assigned_tags}
@@ -301,7 +306,11 @@ def inbox_topic(db: Session, user_id: int) -> int:
     # 在同一筆交易建立或重用首則記事的收件匣，避免重複建立。
     # 收件匣以帳號區分：自己的收件匣即使已設為家庭共用，擁有者仍可繼續用它快速記事；
     # (owner_id, name) 唯一約束保證不會出現第二本同名筆記本。
-    book = db.scalar(select(Notebook).where(Notebook.name == "收件匣", Notebook.owner_id == user_id).order_by(Notebook.id).limit(1))
+    book = db.scalar(
+        select(Notebook)
+        .where(Notebook.name == "收件匣", Notebook.owner_id == user_id)
+        .order_by(Notebook.id).limit(1)
+    )
     if book is None:
         book = Notebook(name="收件匣", owner_id=user_id)
         db.add(book)
@@ -382,7 +391,10 @@ def workspace_actions(engine: Engine, settings: Settings, uploads: FilePath) -> 
                 if template is None:
                     raise HTTPException(404, "找不到這個範本。")
                 item.content_format = template.content_format
-                item.content = template_html(template.content) if template.content_format == "html" else template.content
+                item.content = (
+                    template_html(template.content)
+                    if template.content_format == "html" else template.content
+                )
             db.add(item)
             db.flush()
             return RedirectResponse(item_url(kind, item.id), status_code=303)

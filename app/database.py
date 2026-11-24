@@ -3,12 +3,16 @@ from pathlib import Path
 from sqlite3 import Connection
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Table, UniqueConstraint, URL, create_engine, event, func, inspect, select, update
+from sqlalchemy import (
+    CheckConstraint, Column, ForeignKey, Table, UniqueConstraint, URL,
+    create_engine, event, func, inspect, select, update,
+)
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.search import note_text
+
 
 class Base(DeclarativeBase):
     pass
@@ -99,7 +103,6 @@ class Template(Owned, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
     content: Mapped[str] = mapped_column(default="")
-
 
     content_format: Mapped[str] = mapped_column(server_default="plain")
 

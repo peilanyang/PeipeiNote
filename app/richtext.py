@@ -36,7 +36,13 @@ ALLOWED_TAGS = {
 CLEAN_OPTIONS = dict(
     clean_content_tags={"script", "style", "iframe", "object", "svg", "math", "template"},
     attribute_filter=filter_attribute,
-    attributes={"img": {"src", "alt", "width", "height"}, "a": {"href"}, "ol": {"start"}, "td": {"colspan", "rowspan"}, "th": {"colspan", "rowspan"}},
+    attributes={
+        "img": {"src", "alt", "width", "height"},
+        "a": {"href"},
+        "ol": {"start"},
+        "td": {"colspan", "rowspan"},
+        "th": {"colspan", "rowspan"},
+    },
     tag_attribute_values={
         "ul": {"data-type": {"taskList"}},
         "li": {"data-type": {"taskItem"}, "data-checked": {"true", "false"}},
